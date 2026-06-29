@@ -133,6 +133,9 @@
           "xunit.v3.extensibility.core": "[1.1.0]",
           "xunit.v3.runner.common": "[1.1.0]"
         }
+      },
+      "csharplspmux": {
+        "type": "Project"
       }
     }
   }
