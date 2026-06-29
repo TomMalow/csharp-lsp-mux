@@ -1,39 +1,93 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CsharpLspMux;
 
 var stdin = Console.OpenStandardInput();
 var stdout = Console.OpenStandardOutput();
 
-while (true)
+var repoRoot = Environment.GetEnvironmentVariable("REPO_ROOT") ?? Directory.GetCurrentDirectory();
+var router = new SolutionRouter(repoRoot);
+var serverPool = new Dictionary<string, RoslynServerProcess>();
+
+try
 {
-    var message = await ReadMessageAsync(stdin);
-    if (message is null) break;
-
-    var method = message["method"]?.GetValue<string>();
-
-    if (method == "initialize")
+    while (true)
     {
-        var id = message["id"];
-        await SendResponseAsync(stdout, id, new JsonObject
+        var message = await ReadMessageAsync(stdin);
+        if (message is null) break;
+
+        var method = message["method"]?.GetValue<string>();
+
+        if (method == "initialize")
         {
-            ["capabilities"] = new JsonObject(),
-            ["serverInfo"] = new JsonObject
+            var id = message["id"];
+            await SendResponseAsync(stdout, id, new JsonObject
             {
-                ["name"] = "csharp-lsp-mux",
-                ["version"] = "0.1.0"
+                ["capabilities"] = new JsonObject(),
+                ["serverInfo"] = new JsonObject
+                {
+                    ["name"] = "csharp-lsp-mux",
+                    ["version"] = "0.1.0"
+                }
+            });
+        }
+        else if (method == "initialized")
+        {
+            // acknowledge; no forwarding needed yet
+        }
+        else if (method is not null && method.StartsWith("textDocument/", StringComparison.Ordinal))
+        {
+            var uri = message["params"]?["textDocument"]?["uri"]?.GetValue<string>();
+            if (uri is not null)
+            {
+                var filePath = new Uri(uri).LocalPath;
+                var solutionPath = router.Route(filePath);
+
+                if (solutionPath is not null)
+                {
+                    if (!serverPool.TryGetValue(solutionPath, out var server))
+                    {
+                        server = RoslynServerProcess.Start(solutionPath, stdout);
+                        serverPool[solutionPath] = server;
+                    }
+
+                    var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+                    await server.ForwardRequestAsync(raw);
+                }
+                else
+                {
+                    // No owning solution found — return null result for requests, ignore notifications
+                    if (message["id"] is JsonNode requestId)
+                        await SendResponseAsync(stdout, requestId, JsonValue.Create<object?>(null)!);
+                }
             }
-        });
+        }
+        else if (method == "shutdown")
+        {
+            var id = message["id"];
+            await DrainServersAsync(serverPool);
+            await SendResponseAsync(stdout, id, JsonValue.Create<object?>(null)!);
+        }
+        else if (method == "exit")
+        {
+            break;
+        }
     }
-    else if (method == "shutdown")
+}
+finally
+{
+    await DrainServersAsync(serverPool);
+}
+
+static async Task DrainServersAsync(Dictionary<string, RoslynServerProcess> pool)
+{
+    var servers = pool.Values.ToList();
+    pool.Clear();
+    await Task.WhenAll(servers.Select(async s =>
     {
-        var id = message["id"];
-        await SendResponseAsync(stdout, id, JsonValue.Create<object?>(null)!);
-    }
-    else if (method == "exit")
-    {
-        break;
-    }
+        try { await s.DisposeAsync(); } catch { }
+    }));
 }
 
 static async Task<JsonObject?> ReadMessageAsync(Stream stream)
