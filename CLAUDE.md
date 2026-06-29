@@ -29,11 +29,10 @@ Content-Length framed reading/writing over streams. Parses JSON-RPC message enve
 Pure function: given absolute file path + repo root → absolute path of owning `.sln`/`.slnx`.
 
 **Algorithm:**
-1. Walk ancestor directories from file upward
-2. If `.sln`/`.slnx` found in current directory → return it (Pattern A)
-3. If walk exits repo root without finding one → fallback: find nearest `src/` ancestor, scan subtree for all `.sln`/`.slnx`, return the one with most `.csproj` references (Pattern B)
-4. Memoize results keyed by file path
-5. Invalidate on `workspace/didChangeWatchedFiles` for `.sln`/`.slnx`/`.csproj` changes
+1. **Ancestor walk**: walk directories upward from file — if `.sln`/`.slnx` found → return it
+2. **Sibling scan** (fallback): if ancestor walk exits repo root without finding one → find nearest `src/` ancestor, scan subtree for all `.sln`/`.slnx`, return the one with most `.csproj` references
+3. Memoize results keyed by file path
+4. Invalidate on `workspace/didChangeWatchedFiles` for `.sln`/`.slnx`/`.csproj` changes
 
 ### ServerPool
 Bounded set of `roslyn-language-server` child processes. Keyed by solution path. Cap: `LSP_ROUTER_MAX_SERVERS` (default 10). LRU eviction via `shutdown` → `exit` → kill.
@@ -75,7 +74,7 @@ dotnet tool install --global --add-source ./src/LspRouter
 - **No startup scan** — solutions discovered lazily on first file access
 - **roslyn-language-server only** — no OmniSharp/csharp-ls
 - **Transport-transparent** — forwards raw JSON unchanged except correlation ID rewriting
-- **macOS only** — forward-slash paths, no Windows path handling
+- **Cross-platform** — uses `Path.Combine`/`Path.GetFullPath` and platform-appropriate case sensitivity
 - **Single workspace folder** — no multi-root workspace negotiation
 
 ## Agent skills
