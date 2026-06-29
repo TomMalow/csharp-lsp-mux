@@ -1,0 +1,79 @@
+# csharp-lsp-mux
+
+A transparent LSP multiplexer for C# mono-repos. Routes LSP requests from Claude Code to the correct `roslyn-language-server` instance based on which solution owns the file being edited.
+
+## Problem
+
+In a mono-repo with many `.sln` files, the standard `csharp-lsp` plugin binds to whichever solution it finds first — go-to-definition, hover, and diagnostics all return results from the wrong context.
+
+## Solution
+
+`csharp-lsp-mux` sits between Claude Code and a pool of Roslyn servers (one per solution). It inspects each request's file URI, maps it to the owning solution, and forwards to the right server. Servers start lazily on first access; the pool is bounded with LRU eviction.
+
+## Features
+
+- **Lazy server startup** — no upfront scan; servers spin up on first file access
+- **Pattern A routing** — walks ancestor directories for `.sln`/`.slnx`
+- **Pattern B routing** — fallback for sibling-project layouts (scans `src/` subtree, picks solution with most `.csproj` references)
+- **Bounded pool** — configurable cap (`LSP_ROUTER_MAX_SERVERS`, default 10) with LRU eviction
+- **Request queuing** — requests arriving before a server finishes initializing are queued, not dropped
+- **Cancel forwarding** — `$/cancelRequest` routed to the correct server
+- **Workspace symbol merge** — `workspace/symbol` broadcasts to all active servers
+- **Cache invalidation** — routing cache refreshes on `.sln`/`.slnx`/`.csproj` changes
+- **Clean shutdown** — all child servers drained on proxy exit
+
+## Installation
+
+```bash
+# Build and install as a global tool
+dotnet tool install --global --add-source ./src/LspRouter
+
+# Verify
+csharp-lsp-mux --version
+```
+
+## Claude Code Plugin Setup
+
+In your consumer repo (e.g. your mono-repo), create:
+
+```
+.claude/plugins/csharp-lsp-mux/
+├── .claude-plugin/
+│   └── plugin.json
+└── .lsp.json
+```
+
+`.lsp.json`:
+```json
+{
+  "csharp": {
+    "command": "csharp-lsp-mux",
+    "extensionToLanguage": {
+      ".cs": "csharp"
+    }
+  }
+}
+```
+
+## Configuration
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `LSP_ROUTER_MAX_SERVERS` | `10` | Max concurrent Roslyn server instances |
+| `LSP_ROUTER_IDLE_TIMEOUT_MINUTES` | disabled | Auto-evict servers after N minutes idle |
+
+## Architecture
+
+See [CLAUDE.md](./CLAUDE.md) for module map, routing algorithm, and development conventions.
+
+## Development
+
+```bash
+dotnet build
+dotnet test
+dotnet pack -c Release
+```
+
+## License
+
+MIT
