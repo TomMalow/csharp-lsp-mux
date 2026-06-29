@@ -77,3 +77,17 @@ dotnet tool install --global --add-source ./src/LspRouter
 - **Transport-transparent** — forwards raw JSON unchanged except correlation ID rewriting
 - **macOS only** — forward-slash paths, no Windows path handling
 - **Single workspace folder** — no multi-root workspace negotiation
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (`TomMalow/csharp-lsp-mux`); external PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context repo — `CONTEXT.md` + `docs/adr/` at root. See `docs/agents/domain.md`.
