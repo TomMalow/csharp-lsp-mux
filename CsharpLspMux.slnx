@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CsharpLspMux/CsharpLspMux.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CsharpLspMux.Tests/CsharpLspMux.Tests.csproj" />
+  </Folder>
+</Solution>

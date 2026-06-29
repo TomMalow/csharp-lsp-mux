@@ -7,14 +7,14 @@ A dotnet global tool (`csharp-lsp-mux`) that multiplexes LSP JSON-RPC between Cl
 ## Repo layout
 
 ```
-LspRouter.sln
+CsharpLspMux.slnx
 NuGet.Config                        ← nuget.org only
 Directory.Build.props               ← RestorePackagesWithLockFile=true, NuGetAudit=true
-src/LspRouter/
-    LspRouter.csproj                ← net10.0, PackAsTool=true, ToolCommandName=csharp-lsp-mux
+src/CsharpLspMux/
+    CsharpLspMux.csproj             ← net10.0, PackAsTool=true, ToolCommandName=csharp-lsp-mux
     Program.cs                      ← entry point: stdin/stdout JSON-RPC loop
-tests/LspRouter.Tests/
-    LspRouter.Tests.csproj          ← net10.0, xUnit v3
+tests/CsharpLspMux.Tests/
+    CsharpLspMux.Tests.csproj       ← net10.0, xUnit v3
 ```
 
 ## Modules
@@ -59,7 +59,7 @@ dotnet test
 dotnet pack -c Release
 
 # Install locally
-dotnet tool install --global --add-source ./src/LspRouter
+dotnet tool install --global --add-source ./src/CsharpLspMux
 ```
 
 ## Test conventions
