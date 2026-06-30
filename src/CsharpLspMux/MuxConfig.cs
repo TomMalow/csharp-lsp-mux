@@ -5,6 +5,7 @@ namespace CsharpLspMux;
 public sealed class MuxConfig
 {
     public int MaxServers { get; }
+    public string MaxServersSource { get; }
 
     public MuxConfig(string repoRoot)
     {
@@ -30,6 +31,20 @@ public sealed class MuxConfig
         var envRaw = Environment.GetEnvironmentVariable("LSP_ROUTER_MAX_SERVERS");
         int? envMax = int.TryParse(envRaw, out var n) && n > 0 ? n : null;
 
-        MaxServers = envMax ?? fileMax ?? 10;
+        if (envMax != null)
+        {
+            MaxServers = envMax.Value;
+            MaxServersSource = "env";
+        }
+        else if (fileMax != null)
+        {
+            MaxServers = fileMax.Value;
+            MaxServersSource = "file";
+        }
+        else
+        {
+            MaxServers = 10;
+            MaxServersSource = "default";
+        }
     }
 }
