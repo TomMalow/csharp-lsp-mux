@@ -7,5 +7,10 @@ public interface ISolutionRouter
     /// </summary>
     string? Route(string absoluteFilePath);
 
+    /// <summary>
+    /// Evicts cache entries affected by <paramref name="changedPath"/>.
+    /// Only entries whose resolved solution directory shares a directory prefix
+    /// with <paramref name="changedPath"/> are removed; unrelated solutions are preserved.
+    /// </summary>
     void InvalidateCache(string changedPath);
 }
