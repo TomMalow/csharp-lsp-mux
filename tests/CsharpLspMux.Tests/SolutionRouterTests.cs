@@ -136,4 +136,80 @@ public sealed class SolutionRouterTests : IDisposable
 
         Assert.Equal(slnPath, after);
     }
+
+    // Sibling scan tests
+
+    [Fact]
+    public void SiblingScan_OneSln_ReturnsThatSln()
+    {
+        // src/
+        //   ServiceA/           ← file lives here, no .sln ancestor
+        //     Feature/
+        //       Foo.cs
+        //   ServiceB/
+        //     ServiceB.sln
+        var serviceADeep = MakeDir("src", "ServiceA", "Feature");
+        var csFile = MakeFile(serviceADeep, "Foo.cs");
+        var serviceBDir = MakeDir("src", "ServiceB");
+        var slnPath = MakeFile(serviceBDir, "ServiceB.sln");
+
+        var router = new SolutionRouter(_root);
+        var result = router.Route(csFile);
+
+        Assert.Equal(slnPath, result);
+    }
+
+    [Fact]
+    public void SiblingScan_MultipleSlns_ReturnsOneWithMostCsprojRefs()
+    {
+        // src/
+        //   ServiceA/Feature/Foo.cs    ← file, no .sln ancestor
+        //   Small/Small.sln            ← 1 .csproj ref
+        //   Big/Big.sln                ← 3 .csproj refs  ← expected winner
+        var serviceADeep = MakeDir("src", "ServiceA", "Feature");
+        var csFile = MakeFile(serviceADeep, "Foo.cs");
+
+        var smallDir = MakeDir("src", "Small");
+        var smallSln = Path.Combine(smallDir, "Small.sln");
+        File.WriteAllText(smallSln, "Project(\"{FAE04EC0}\") = \"A\", \"A\\A.csproj\", \"{GUID}\"");
+
+        var bigDir = MakeDir("src", "Big");
+        var bigSln = Path.Combine(bigDir, "Big.sln");
+        File.WriteAllText(bigSln,
+            "Project = \"A\\A.csproj\"\nProject = \"B\\B.csproj\"\nProject = \"C\\C.csproj\"");
+
+        var router = new SolutionRouter(_root);
+        var result = router.Route(csFile);
+
+        Assert.Equal(bigSln, result);
+    }
+
+    [Fact]
+    public void SiblingScan_NoSrcAncestor_ReturnsNull()
+    {
+        // tools/scripts/Foo.cs — not under src/, no .sln ancestor
+        var toolsDir = MakeDir("tools", "scripts");
+        var csFile = MakeFile(toolsDir, "Foo.cs");
+        // a .sln exists under src/ but the file has no src/ ancestor
+        var srcDir = MakeDir("src", "SomeService");
+        MakeFile(srcDir, "SomeService.sln");
+
+        var router = new SolutionRouter(_root);
+        var result = router.Route(csFile);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void SiblingScan_SrcAncestorButNoSolutions_ReturnsNull()
+    {
+        // src/ServiceA/Feature/Foo.cs — under src/, but src/ has no .sln/.slnx
+        var deepDir = MakeDir("src", "ServiceA", "Feature");
+        var csFile = MakeFile(deepDir, "Foo.cs");
+
+        var router = new SolutionRouter(_root);
+        var result = router.Route(csFile);
+
+        Assert.Null(result);
+    }
 }
