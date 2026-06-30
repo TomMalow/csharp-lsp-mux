@@ -1,4 +1,15 @@
+using System.Reflection;
 using CsharpLspMux;
+
+if (args.Length == 1 && args[0] == "--version")
+{
+    var rawVersion = Assembly.GetEntryAssembly()
+        ?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+        ?.InformationalVersion ?? "unknown";
+    var version = rawVersion.Split('+')[0];
+    Console.WriteLine($"csharp-lsp-mux {version}");
+    return;
+}
 
 var stdinReader = new LspFrameReader(Console.OpenStandardInput());
 var lspTransport = new LspTransport(Console.OpenStandardOutput());
