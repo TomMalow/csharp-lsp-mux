@@ -201,6 +201,73 @@ public sealed class SolutionRouterTests : IDisposable
     }
 
     [Fact]
+    public void InvalidateCache_NullEntry_AlwaysEvictedSoSiblingSlnCanBeFound()
+    {
+        // Foo.cs routes to null (no solution anywhere yet).
+        // A new ServiceB.sln drops in a sibling directory — InvalidateCache fires.
+        // Foo.cs's null entry must be evicted so it can re-resolve via SiblingScan.
+        var serviceADir = MakeDir("src", "ServiceA");
+        var fooCs = MakeFile(serviceADir, "Foo.cs");
+
+        var serviceBDir = MakeDir("src", "ServiceB");
+
+        var router = new SolutionRouter(_root);
+        Assert.Null(router.Route(fooCs)); // cached as null
+
+        var slnB = MakeFile(serviceBDir, "ServiceB.sln");
+        File.WriteAllText(slnB, "Project = \"ServiceB.csproj\"");
+
+        router.InvalidateCache(slnB); // sibling dir — old code would keep null entry
+
+        // SiblingScan should now find ServiceB.sln
+        Assert.Equal(slnB, router.Route(fooCs));
+    }
+
+    [Fact]
+    public void InvalidateCache_SlnChange_DoesNotEvictUnrelatedService()
+    {
+        // ServiceA and ServiceB are independent — invalidating ServiceA.sln
+        // must leave ServiceB's cached entry intact.
+        var serviceADir = MakeDir("src", "ServiceA");
+        var slnA = MakeFile(serviceADir, "ServiceA.sln");
+        var fooCs = MakeFile(serviceADir, "Foo.cs");
+
+        var serviceBDir = MakeDir("src", "ServiceB");
+        var slnB = MakeFile(serviceBDir, "ServiceB.sln");
+        var barCs = MakeFile(serviceBDir, "Bar.cs");
+
+        var router = new SolutionRouter(_root);
+        Assert.Equal(slnA, router.Route(fooCs));
+        Assert.Equal(slnB, router.Route(barCs));
+
+        // Remove slnB from disk — proves the result below is a cache hit, not a re-resolve.
+        File.Delete(slnB);
+
+        router.InvalidateCache(slnA);
+
+        Assert.Equal(slnB, router.Route(barCs));
+    }
+
+    [Fact]
+    public void InvalidateCache_SlnChange_EvictsAffectedEntries()
+    {
+        var serviceADir = MakeDir("src", "ServiceA");
+        var slnA = MakeFile(serviceADir, "ServiceA.sln");
+        var fooCs = MakeFile(serviceADir, "Foo.cs");
+
+        var router = new SolutionRouter(_root);
+        Assert.Equal(slnA, router.Route(fooCs));
+
+        // Replace sln on disk so re-resolve would produce a different result.
+        File.Delete(slnA);
+        var slnA2 = MakeFile(serviceADir, "ServiceA.slnx");
+
+        router.InvalidateCache(slnA);
+
+        Assert.Equal(slnA2, router.Route(fooCs));
+    }
+
+    [Fact]
     public void SiblingScan_SrcAncestorButNoSolutions_ReturnsNull()
     {
         // src/ServiceA/Feature/Foo.cs — under src/, but src/ has no .sln/.slnx

@@ -18,7 +18,22 @@ public sealed class SolutionRouter(string repoRoot) : ISolutionRouter
 
     public void InvalidateCache(string changedPath)
     {
-        _cache.Clear();
+        var changedDir = Path.GetDirectoryName(Path.GetFullPath(changedPath)) ?? _repoRoot;
+
+        foreach (var (fileKey, solutionPath) in _cache)
+        {
+            // Null entries encode "no solution found" — any structural change may make them
+            // resolvable (e.g. a new .sln dropping in a sibling directory), so always evict.
+            if (solutionPath is null)
+            {
+                _cache.TryRemove(fileKey, out _);
+                continue;
+            }
+
+            var solutionDir = Path.GetDirectoryName(solutionPath) ?? _repoRoot;
+            if (IsAncestorOrEqual(changedDir, solutionDir) || IsAncestorOrEqual(solutionDir, changedDir))
+                _cache.TryRemove(fileKey, out _);
+        }
     }
 
     private string? Resolve(string filePath)
@@ -86,10 +101,10 @@ public sealed class SolutionRouter(string repoRoot) : ISolutionRouter
         }
     }
 
-    private bool IsAtOrInsideRepoRoot(string dir)
-    {
-        var normalized = Path.GetFullPath(dir);
-        return normalized.Equals(_repoRoot, StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith(_repoRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-    }
+    private bool IsAtOrInsideRepoRoot(string dir) =>
+        IsAncestorOrEqual(_repoRoot, Path.GetFullPath(dir));
+
+    private static bool IsAncestorOrEqual(string ancestor, string descendant) =>
+        descendant.Equals(ancestor, StringComparison.OrdinalIgnoreCase)
+        || descendant.StartsWith(ancestor + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 }
