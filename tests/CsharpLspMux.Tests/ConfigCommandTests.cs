@@ -53,7 +53,7 @@ public sealed class ConfigCommandTests
         using var dir = TempDir();
         WithEnv("LSP_ROUTER_MAX_SERVERS", null, () =>
         {
-            var output = CaptureStdout(() => ConfigCommand.Run(["get", "max-servers"], dir.Path));
+            var output = CaptureStdout(() => ConfigCommand.Run(["get", "max-servers"], dir.Path, NoUserConfig));
             Assert.Equal("max-servers = 10 (source: default)", output.Trim());
         });
     }
@@ -65,7 +65,7 @@ public sealed class ConfigCommandTests
         File.WriteAllText(Path.Combine(dir.Path, ".csharp-lsp-mux.json"), """{"maxServers":7}""");
         WithEnv("LSP_ROUTER_MAX_SERVERS", null, () =>
         {
-            var output = CaptureStdout(() => ConfigCommand.Run(["get", "max-servers"], dir.Path));
+            var output = CaptureStdout(() => ConfigCommand.Run(["get", "max-servers"], dir.Path, NoUserConfig));
             Assert.Equal("max-servers = 7 (source: file)", output.Trim());
         });
     }
@@ -77,7 +77,7 @@ public sealed class ConfigCommandTests
         string output = "";
         WithEnv("LSP_ROUTER_MAX_SERVERS", "4", () =>
         {
-            output = CaptureStdout(() => ConfigCommand.Run(["get", "max-servers"], dir.Path));
+            output = CaptureStdout(() => ConfigCommand.Run(["get", "max-servers"], dir.Path, NoUserConfig));
         });
         Assert.Equal("max-servers = 4 (source: env)", output.Trim());
     }
@@ -89,12 +89,58 @@ public sealed class ConfigCommandTests
         File.WriteAllText(Path.Combine(dir.Path, ".csharp-lsp-mux.json"), """{"maxServers":6}""");
         WithEnv("LSP_ROUTER_MAX_SERVERS", null, () =>
         {
-            var output = CaptureStdout(() => ConfigCommand.Run(["list"], dir.Path));
+            var output = CaptureStdout(() => ConfigCommand.Run(["list"], dir.Path, NoUserConfig));
             Assert.Contains("max-servers = 6 (source: file)", output);
         });
     }
 
+    [Fact]
+    public void Set_Global_WritesToUserConfigPath()
+    {
+        using var repoDir = TempDir();
+        using var userDir = TempDir();
+        var userConfigPath = Path.Combine(userDir.Path, "config.json");
+
+        var code = ConfigCommand.Run(["set", "--global", "max-servers", "5"], repoDir.Path, userConfigPath);
+
+        Assert.Equal(0, code);
+        var json = File.ReadAllText(userConfigPath);
+        Assert.Contains("\"maxServers\"", json);
+        Assert.Contains("5", json);
+    }
+
+    [Fact]
+    public void Set_Global_CreatesParentDirectory()
+    {
+        using var repoDir = TempDir();
+        using var baseDir = TempDir();
+        var userConfigPath = Path.Combine(baseDir.Path, "subdir", "config.json");
+
+        var code = ConfigCommand.Run(["set", "--global", "max-servers", "7"], repoDir.Path, userConfigPath);
+
+        Assert.Equal(0, code);
+        Assert.True(File.Exists(userConfigPath));
+    }
+
+    [Fact]
+    public void Get_UserFileValue_ShowsUserSource()
+    {
+        using var repoDir = TempDir();
+        using var userDir = TempDir();
+        var userConfigPath = Path.Combine(userDir.Path, "config.json");
+        File.WriteAllText(userConfigPath, """{"maxServers":9}""");
+
+        WithEnv("LSP_ROUTER_MAX_SERVERS", null, () =>
+        {
+            var output = CaptureStdout(() => ConfigCommand.Run(["get", "max-servers"], repoDir.Path, userConfigPath));
+            Assert.Equal("max-servers = 9 (source: user)", output.Trim());
+        });
+    }
+
     // --- helpers ---
+
+    private static string NoUserConfig =>
+        Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "config.json");
 
     private static string CaptureStdout(Func<int> action)
     {
