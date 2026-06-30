@@ -1,6 +1,6 @@
 using CsharpLspMux;
 
-var stdin = Console.OpenStandardInput();
+var stdinReader = new LspFrameReader(Console.OpenStandardInput());
 var lspTransport = new LspTransport(Console.OpenStandardOutput());
 
 var repoRoot = Environment.GetEnvironmentVariable("REPO_ROOT") ?? Directory.GetCurrentDirectory();
@@ -12,7 +12,7 @@ pool.OnEvict = dispatcher.NotifyEviction;
 
 while (true)
 {
-    var message = await LspTransport.ReadMessageAsync(stdin);
+    var message = await stdinReader.ReadFrameAsync();
     if (message is null) break;
     if (!await dispatcher.HandleMessageAsync(message)) break;
 }

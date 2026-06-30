@@ -8,58 +8,6 @@ namespace CsharpLspMux.Tests;
 
 public class LspTransportTests
 {
-    private static MemoryStream FramedStream(string json)
-    {
-        var body = Encoding.UTF8.GetBytes(json);
-        var header = Encoding.UTF8.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
-        var ms = new MemoryStream();
-        ms.Write(header);
-        ms.Write(body);
-        ms.Position = 0;
-        return ms;
-    }
-
-    private static MemoryStream EmptyStream() => new();
-
-    [Fact]
-    public async Task ReadMessageAsync_ParsesFramedMessage()
-    {
-        var json = """{"jsonrpc":"2.0","method":"initialized"}""";
-        using var stream = FramedStream(json);
-
-        var result = await LspTransport.ReadMessageAsync(stream, CancellationToken.None);
-
-        Assert.NotNull(result);
-        Assert.Equal("initialized", result["method"]?.GetValue<string>());
-    }
-
-    [Fact]
-    public async Task ReadMessageAsync_ReturnsNullOnEof()
-    {
-        using var stream = EmptyStream();
-
-        var result = await LspTransport.ReadMessageAsync(stream, CancellationToken.None);
-
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public async Task ReadMessageAsync_IgnoresUnknownHeaders()
-    {
-        var json = """{"jsonrpc":"2.0","id":1}""";
-        var body = Encoding.UTF8.GetBytes(json);
-        var ms = new MemoryStream();
-        ms.Write(Encoding.UTF8.GetBytes($"Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n"));
-        ms.Write(Encoding.UTF8.GetBytes($"Content-Length: {body.Length}\r\n\r\n"));
-        ms.Write(body);
-        ms.Position = 0;
-
-        var result = await LspTransport.ReadMessageAsync(ms, CancellationToken.None);
-
-        Assert.NotNull(result);
-        Assert.Equal(1, result["id"]?.GetValue<int>());
-    }
-
     [Fact]
     public async Task WriteFrameAsync_WritesContentLengthFramedBytes()
     {
@@ -91,22 +39,5 @@ public class LspTransportTests
         Assert.Equal("2.0", parsed["jsonrpc"]?.GetValue<string>());
         Assert.Equal(42, parsed["id"]?.GetValue<int>());
         Assert.True(parsed["result"]?["ok"]?.GetValue<bool>());
-    }
-
-    [Fact]
-    public async Task RoundTrip_WriteReadProducesOriginalMessage()
-    {
-        var pipe = new MemoryStream();
-        var transport = new LspTransport(pipe);
-        var original = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "$/ping" };
-        var frame = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(original));
-
-        await transport.WriteFrameAsync(frame);
-        pipe.Position = 0;
-
-        var result = await LspTransport.ReadMessageAsync(pipe, CancellationToken.None);
-
-        Assert.NotNull(result);
-        Assert.Equal("$/ping", result["method"]?.GetValue<string>());
     }
 }

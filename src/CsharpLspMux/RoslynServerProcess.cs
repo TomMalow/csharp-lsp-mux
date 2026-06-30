@@ -14,7 +14,7 @@ public sealed class RoslynServerProcess : IChildServer
 {
     private readonly Process _process;
     private readonly Stream _stdin;
-    private readonly Stream _stdout;
+    private readonly IFrameReader _reader;
     private readonly ILspTransport _clientTransport;
 
     private readonly InitBarrier _gate = new();
@@ -32,7 +32,7 @@ public sealed class RoslynServerProcess : IChildServer
     {
         _process = process;
         _stdin = process.StandardInput.BaseStream;
-        _stdout = process.StandardOutput.BaseStream;
+        _reader = new LspFrameReader(process.StandardOutput.BaseStream);
         _clientTransport = clientTransport;
         _readerTask = Task.Run(ReadLoopAsync);
     }
@@ -99,7 +99,7 @@ public sealed class RoslynServerProcess : IChildServer
         {
             while (!_cts.Token.IsCancellationRequested)
             {
-                var message = await LspTransport.ReadMessageAsync(_stdout, _cts.Token);
+                var message = await _reader.ReadFrameAsync(_cts.Token);
                 if (message is null) break;
 
                 var method = message["method"]?.GetValue<string>();
