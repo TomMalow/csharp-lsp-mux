@@ -4,7 +4,7 @@ A transparent LSP multiplexer for C# mono-repos. Routes LSP requests from Claude
 
 ## Problem
 
-In a mono-repo with many `.sln` files, the standard `csharp-lsp` plugin binds to whichever solution it finds first — go-to-definition, hover, and diagnostics all return results from the wrong context.
+In a mono-repo with many `.sln` files, a single language server binds to whichever solution it finds first — go-to-definition, hover, and diagnostics all return results from the wrong context.
 
 ## Solution
 
@@ -13,8 +13,8 @@ In a mono-repo with many `.sln` files, the standard `csharp-lsp` plugin binds to
 ## Features
 
 - **Lazy server startup** — no upfront scan; servers spin up on first file access
-- **Pattern A routing** — walks ancestor directories for `.sln`/`.slnx`
-- **Pattern B routing** — fallback for sibling-project layouts (scans `src/` subtree, picks solution with most `.csproj` references)
+- **Ancestor walk** — walks parent directories from file toward repo root for `.sln`/`.slnx`
+- **Sibling scan** — fallback for sibling-project layouts (scans `src/` subtree, picks solution with most `.csproj` references)
 - **Bounded pool** — configurable cap (`LSP_ROUTER_MAX_SERVERS`, default 10) with LRU eviction
 - **Request queuing** — requests arriving before a server finishes initializing are queued, not dropped
 - **Cancel forwarding** — `$/cancelRequest` routed to the correct server
@@ -26,7 +26,7 @@ In a mono-repo with many `.sln` files, the standard `csharp-lsp` plugin binds to
 
 ```bash
 # Build and install as a global tool
-dotnet tool install --global --add-source ./src/LspRouter
+dotnet tool install --global --add-source ./src/CsharpLspMux
 
 # Verify
 csharp-lsp-mux --version
@@ -34,13 +34,20 @@ csharp-lsp-mux --version
 
 ## Claude Code Plugin Setup
 
-In your consumer repo (e.g. your mono-repo), create:
+In your consumer repo (e.g. your mono-repo), create a plugin:
 
 ```
 .claude/plugins/csharp-lsp-mux/
 ├── .claude-plugin/
 │   └── plugin.json
 └── .lsp.json
+```
+
+`plugin.json`:
+```json
+{
+  "name": "csharp-lsp-mux"
+}
 ```
 
 `.lsp.json`:
@@ -50,6 +57,9 @@ In your consumer repo (e.g. your mono-repo), create:
     "command": "csharp-lsp-mux",
     "extensionToLanguage": {
       ".cs": "csharp"
+    },
+    "env": {
+      "LSP_ROUTER_MAX_SERVERS": "10"
     }
   }
 }
@@ -60,7 +70,8 @@ In your consumer repo (e.g. your mono-repo), create:
 | Environment Variable | Default | Description |
 |---|---|---|
 | `LSP_ROUTER_MAX_SERVERS` | `10` | Max concurrent Roslyn server instances |
-| `LSP_ROUTER_IDLE_TIMEOUT_MINUTES` | disabled | Auto-evict servers after N minutes idle |
+
+Set environment variables in the `env` block of `.lsp.json`, or export them in your shell before launching Claude Code.
 
 ## Unsupported cases
 
