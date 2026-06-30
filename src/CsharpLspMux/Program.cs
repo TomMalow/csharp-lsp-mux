@@ -8,7 +8,9 @@ var stdout = Console.OpenStandardOutput();
 
 var repoRoot = Environment.GetEnvironmentVariable("REPO_ROOT") ?? Directory.GetCurrentDirectory();
 var router = new SolutionRouter(repoRoot);
-var serverPool = new Dictionary<string, RoslynServerProcess>();
+var serverPool = ServerPool<RoslynServerProcess>.FromEnvironment(
+    sln => Task.FromResult(RoslynServerProcess.Start(sln, stdout)));
+var poolDrained = false;
 
 try
 {
@@ -46,12 +48,7 @@ try
 
                 if (solutionPath is not null)
                 {
-                    if (!serverPool.TryGetValue(solutionPath, out var server))
-                    {
-                        server = RoslynServerProcess.Start(solutionPath, stdout);
-                        serverPool[solutionPath] = server;
-                    }
-
+                    var server = await serverPool.GetOrAddAsync(solutionPath);
                     var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
                     await server.ForwardRequestAsync(raw);
                 }
@@ -66,7 +63,8 @@ try
         else if (method == "shutdown")
         {
             var id = message["id"];
-            await DrainServersAsync(serverPool);
+            await serverPool.DisposeAllAsync();
+            poolDrained = true;
             await SendResponseAsync(stdout, id, JsonValue.Create<object?>(null)!);
         }
         else if (method == "exit")
@@ -77,17 +75,8 @@ try
 }
 finally
 {
-    await DrainServersAsync(serverPool);
-}
-
-static async Task DrainServersAsync(Dictionary<string, RoslynServerProcess> pool)
-{
-    var servers = pool.Values.ToList();
-    pool.Clear();
-    await Task.WhenAll(servers.Select(async s =>
-    {
-        try { await s.DisposeAsync(); } catch { }
-    }));
+    if (!poolDrained)
+        await serverPool.DisposeAllAsync();
 }
 
 static async Task<JsonObject?> ReadMessageAsync(Stream stream)
