@@ -10,7 +10,7 @@ namespace CsharpLspMux;
 /// Wraps a single roslyn-language-server child process.
 /// Queues outbound requests until the server signals <c>initialized</c>, then flushes.
 /// </summary>
-public sealed class RoslynServerProcess : IAsyncDisposable
+public sealed class RoslynServerProcess : IChildServer
 {
     private readonly Process _process;
     private readonly Stream _stdin;
