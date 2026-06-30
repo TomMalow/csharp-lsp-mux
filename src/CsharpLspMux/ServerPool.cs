@@ -14,6 +14,11 @@ public sealed class ServerPool<TServer> where TServer : IAsyncDisposable
     private readonly LinkedList<(string Key, TServer Server)> _lru = new();
     private readonly Dictionary<string, LinkedListNode<(string Key, TServer Server)>> _index = new();
 
+    /// <summary>
+    /// Called synchronously when a server is evicted by LRU. Receives the evicted server instance.
+    /// </summary>
+    public Action<TServer>? OnEvict { get; set; }
+
     public ServerPool(int cap, Func<string, Task<TServer>> factory)
     {
         _cap = cap;
@@ -26,6 +31,8 @@ public sealed class ServerPool<TServer> where TServer : IAsyncDisposable
         var cap = int.TryParse(raw, out var n) && n > 0 ? n : 10;
         return new ServerPool<TServer>(cap, factory);
     }
+
+    public IEnumerable<TServer> ActiveServers => _lru.Select(e => e.Server);
 
     public async Task<TServer> GetOrAddAsync(string key)
     {
@@ -64,6 +71,7 @@ public sealed class ServerPool<TServer> where TServer : IAsyncDisposable
         var oldest = _lru.First!;
         _lru.RemoveFirst();
         _index.Remove(oldest.Value.Key);
+        OnEvict?.Invoke(oldest.Value.Server);
         try { await oldest.Value.Server.DisposeAsync(); } catch { }
     }
 }

@@ -62,6 +62,12 @@ In your consumer repo (e.g. your mono-repo), create:
 | `LSP_ROUTER_MAX_SERVERS` | `10` | Max concurrent Roslyn server instances |
 | `LSP_ROUTER_IDLE_TIMEOUT_MINUTES` | disabled | Auto-evict servers after N minutes idle |
 
+## Unsupported cases
+
+- **Shared source files** — if a `.cs` file is included by multiple solutions via `<Compile Include=...>` or linked projects, `workspace/symbol` results from all active servers are merged by concatenation without deduplication. Duplicate symbols may appear in results.
+- **Cross-solution go-to-definition** — a symbol referenced across solution boundaries routes to whichever solution owns the *requesting* file; the definition may live in a different server's index and will not be found.
+- **Multi-root workspaces** — only a single `rootUri` per server is supported; VS Code multi-root workspace folders are not negotiated.
+
 ## Architecture
 
 See [CLAUDE.md](./CLAUDE.md) for module map, routing algorithm, and development conventions.
