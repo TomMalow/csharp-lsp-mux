@@ -17,8 +17,7 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly Stream _stdout;
     private readonly ILspTransport _clientTransport;
 
-    private readonly TaskCompletionSource _initializedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly ConcurrentQueue<byte[]> _pendingQueue = new();
+    private readonly InitBarrier _gate = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
     private readonly CancellationTokenSource _cts = new();
@@ -27,7 +26,7 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly ConcurrentDictionary<string, TaskCompletionSource<byte[]>> _pending = new();
     private int _syntheticIdCounter;
 
-    public bool IsInitialized => _initializedTcs.Task.IsCompleted;
+    public bool IsInitialized => _gate.IsInitialized;
 
     private RoslynServerProcess(Process process, ILspTransport clientTransport)
     {
@@ -86,8 +85,8 @@ public sealed class RoslynServerProcess : IChildServer
     {
         if (!IsInitialized)
         {
-            _pendingQueue.Enqueue(frame);
-            await _initializedTcs.Task;
+            _gate.Enqueue(frame);
+            await _gate.WaitInitializedAsync();
             return;
         }
 
@@ -107,7 +106,7 @@ public sealed class RoslynServerProcess : IChildServer
 
                 if (method == "initialized")
                 {
-                    _initializedTcs.TrySetResult();
+                    _gate.SignalInitialized();
                     await FlushPendingAsync();
                     continue;
                 }
@@ -138,7 +137,7 @@ public sealed class RoslynServerProcess : IChildServer
 
     private async Task FlushPendingAsync()
     {
-        while (_pendingQueue.TryDequeue(out var frame))
+        foreach (var frame in _gate.DrainPending())
             await WriteFrameAsync(frame);
     }
 
@@ -223,4 +222,5 @@ public sealed class RoslynServerProcess : IChildServer
         _cts.Dispose();
         _writeLock.Dispose();
     }
+
 }
