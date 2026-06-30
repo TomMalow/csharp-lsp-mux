@@ -122,8 +122,10 @@ public sealed class RoslynServerProcess : IChildServer
 
                 var method = message["method"]?.GetValue<string>();
 
-                if (method == "initialized")
+                if (method is null && message["id"]?.ToJsonString() == "0" && message["result"] is not null)
                 {
+                    var initialized = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "initialized", ["params"] = new JsonObject() };
+                    await WriteFrameAsync(SerializeFrame(initialized));
                     _gate.SignalInitialized();
                     await FlushPendingAsync();
                     continue;
