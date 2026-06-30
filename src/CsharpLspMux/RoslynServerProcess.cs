@@ -51,6 +51,7 @@ public sealed class RoslynServerProcess : IChildServer
 
         var psi = new ProcessStartInfo("roslyn-language-server")
         {
+            ArgumentList = { "--stdio" },
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
