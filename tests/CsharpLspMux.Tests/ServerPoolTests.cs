@@ -159,22 +159,4 @@ public sealed class ServerPoolTests
         Assert.Same(a, evicted);
     }
 
-    [Fact]
-    public async Task FromEnvironment_UsesEnvVar()
-    {
-        Environment.SetEnvironmentVariable("LSP_ROUTER_MAX_SERVERS", "2");
-        try
-        {
-            var pool = ServerPool<FakeServer>.FromEnvironment(_ => Task.FromResult(new FakeServer()));
-            var a = await pool.GetOrAddAsync("slnA");
-            var b = await pool.GetOrAddAsync("slnB");
-            await pool.GetOrAddAsync("slnC"); // overflows a cap-2 pool
-
-            Assert.Equal(1, a.DisposeCount);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("LSP_ROUTER_MAX_SERVERS", null);
-        }
-    }
 }

@@ -2,7 +2,6 @@ namespace CsharpLspMux;
 
 /// <summary>
 /// Bounded LRU pool of child servers keyed by solution path.
-/// Cap is read from <c>LSP_ROUTER_MAX_SERVERS</c> (default 10).
 /// When full, least-recently-used entry is evicted via DisposeAsync.
 /// </summary>
 public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : IAsyncDisposable
@@ -23,13 +22,6 @@ public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : I
     {
         _cap = cap;
         _factory = factory;
-    }
-
-    public static ServerPool<TServer> FromEnvironment(Func<string, Task<TServer>> factory)
-    {
-        var raw = Environment.GetEnvironmentVariable("LSP_ROUTER_MAX_SERVERS");
-        var cap = int.TryParse(raw, out var n) && n > 0 ? n : 10;
-        return new ServerPool<TServer>(cap, factory);
     }
 
     public IEnumerable<TServer> ActiveServers => _lru.Select(e => e.Server);
