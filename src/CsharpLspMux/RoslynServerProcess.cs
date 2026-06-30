@@ -15,9 +15,7 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly Process _process;
     private readonly Stream _stdin;
     private readonly Stream _stdout;
-    private readonly Stream _responseOut;
-    // Shared across all RoslynServerProcess instances writing to the same responseOut stream.
-    private readonly SemaphoreSlim _responseOutLock;
+    private readonly ILspTransport _clientTransport;
 
     private readonly TaskCompletionSource _initializedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ConcurrentQueue<byte[]> _pendingQueue = new();
@@ -31,17 +29,16 @@ public sealed class RoslynServerProcess : IChildServer
 
     public bool IsInitialized => _initializedTcs.Task.IsCompleted;
 
-    private RoslynServerProcess(Process process, Stream responseOut, SemaphoreSlim responseOutLock)
+    private RoslynServerProcess(Process process, ILspTransport clientTransport)
     {
         _process = process;
         _stdin = process.StandardInput.BaseStream;
         _stdout = process.StandardOutput.BaseStream;
-        _responseOut = responseOut;
-        _responseOutLock = responseOutLock;
+        _clientTransport = clientTransport;
         _readerTask = Task.Run(ReadLoopAsync);
     }
 
-    public static RoslynServerProcess Start(string solutionPath, Stream responseOut, SemaphoreSlim responseOutLock)
+    public static RoslynServerProcess Start(string solutionPath, ILspTransport clientTransport)
     {
         var solutionDir = Path.GetDirectoryName(solutionPath)!;
 
@@ -55,7 +52,7 @@ public sealed class RoslynServerProcess : IChildServer
         };
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start roslyn-language-server");
-        var server = new RoslynServerProcess(process, responseOut, responseOutLock);
+        var server = new RoslynServerProcess(process, clientTransport);
         server.SendInitialize(solutionPath, solutionDir);
         return server;
     }
@@ -103,7 +100,7 @@ public sealed class RoslynServerProcess : IChildServer
         {
             while (!_cts.Token.IsCancellationRequested)
             {
-                var message = await ReadMessageAsync(_stdout, _cts.Token);
+                var message = await LspTransport.ReadMessageAsync(_stdout, _cts.Token);
                 if (message is null) break;
 
                 var method = message["method"]?.GetValue<string>();
@@ -129,7 +126,7 @@ public sealed class RoslynServerProcess : IChildServer
 
                 // Relay responses and notifications back to the client (stdout of proxy)
                 if (message["id"] is not null || method is not null)
-                    await WriteResponseToClientAsync(rawBytes);
+                    await _clientTransport.WriteFrameAsync(rawBytes);
             }
         }
         catch (OperationCanceledException) { }
@@ -143,22 +140,6 @@ public sealed class RoslynServerProcess : IChildServer
     {
         while (_pendingQueue.TryDequeue(out var frame))
             await WriteFrameAsync(frame);
-    }
-
-    private async Task WriteResponseToClientAsync(byte[] body)
-    {
-        var header = Encoding.UTF8.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
-        await _responseOutLock.WaitAsync();
-        try
-        {
-            await _responseOut.WriteAsync(header);
-            await _responseOut.WriteAsync(body);
-            await _responseOut.FlushAsync();
-        }
-        finally
-        {
-            _responseOutLock.Release();
-        }
     }
 
     private async Task WriteFrameAsync(byte[] frame)
@@ -179,47 +160,6 @@ public sealed class RoslynServerProcess : IChildServer
 
     private static byte[] SerializeFrame(JsonObject message)
         => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-
-    private static async Task<JsonObject?> ReadMessageAsync(Stream stream, CancellationToken ct)
-    {
-        int contentLength = -1;
-
-        while (true)
-        {
-            var line = await ReadLineAsync(stream, ct);
-            if (line is null) return null;
-            if (line.Length == 0) break;
-            if (line.StartsWith("Content-Length: ", StringComparison.OrdinalIgnoreCase))
-                contentLength = int.Parse(line["Content-Length: ".Length..]);
-        }
-
-        if (contentLength < 0) return null;
-
-        var buffer = new byte[contentLength];
-        var totalRead = 0;
-        while (totalRead < contentLength)
-        {
-            var read = await stream.ReadAsync(buffer.AsMemory(totalRead), ct);
-            if (read == 0) return null;
-            totalRead += read;
-        }
-
-        return JsonSerializer.Deserialize<JsonObject>(buffer);
-    }
-
-    private static async Task<string?> ReadLineAsync(Stream stream, CancellationToken ct)
-    {
-        var sb = new StringBuilder();
-        var buf = new byte[1];
-        while (true)
-        {
-            var read = await stream.ReadAsync(buf.AsMemory(0, 1), ct);
-            if (read == 0) return null;
-            var ch = (char)buf[0];
-            if (ch == '\n') return sb.ToString().TrimEnd('\r');
-            sb.Append(ch);
-        }
-    }
 
     public async Task<byte[]> SendAndReceiveAsync(byte[] frame)
     {
