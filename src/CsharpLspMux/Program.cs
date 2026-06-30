@@ -8,8 +8,17 @@ var stdout = Console.OpenStandardOutput();
 
 var repoRoot = Environment.GetEnvironmentVariable("REPO_ROOT") ?? Directory.GetCurrentDirectory();
 var router = new SolutionRouter(repoRoot);
+// Serializes all writes to stdout across RoslynServerProcess instances and Program.cs itself.
+var stdoutLock = new SemaphoreSlim(1, 1);
+// Tracks which server owns each in-flight request ID (serialized to string) for cancel forwarding.
+var requestOwners = new Dictionary<string, RoslynServerProcess>();
 var serverPool = ServerPool<RoslynServerProcess>.FromEnvironment(
-    sln => Task.FromResult(RoslynServerProcess.Start(sln, stdout)));
+    sln => Task.FromResult(RoslynServerProcess.Start(sln, stdout, stdoutLock)));
+serverPool.OnEvict = evicted =>
+{
+    foreach (var key in requestOwners.Keys.Where(k => requestOwners[k] == evicted).ToList())
+        requestOwners.Remove(key);
+};
 var poolDrained = false;
 
 try
@@ -24,7 +33,7 @@ try
         if (method == "initialize")
         {
             var id = message["id"];
-            await SendResponseAsync(stdout, id, new JsonObject
+            await SendResponseAsync(stdout, stdoutLock, id, new JsonObject
             {
                 ["capabilities"] = new JsonObject(),
                 ["serverInfo"] = new JsonObject
@@ -50,13 +59,71 @@ try
                 {
                     var server = await serverPool.GetOrAddAsync(solutionPath);
                     var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+                    if (message["id"] is JsonNode requestId)
+                        requestOwners[JsonNodeToKey(requestId)] = server;
                     await server.ForwardRequestAsync(raw);
                 }
                 else
                 {
                     // No owning solution found — return null result for requests, ignore notifications
                     if (message["id"] is JsonNode requestId)
-                        await SendResponseAsync(stdout, requestId, JsonValue.Create<object?>(null)!);
+                        await SendResponseAsync(stdout, stdoutLock, requestId, JsonValue.Create<object?>(null)!);
+                }
+            }
+        }
+        else if (method == "$/cancelRequest")
+        {
+            var cancelId = message["params"]?["id"];
+            if (cancelId is not null)
+            {
+                var key = JsonNodeToKey(cancelId);
+                if (requestOwners.TryGetValue(key, out var owner))
+                {
+                    requestOwners.Remove(key);
+                    var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+                    await owner.ForwardRequestAsync(raw);
+                }
+            }
+        }
+        else if (method == "workspace/symbol")
+        {
+            var requestId = message["id"];
+            var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+            var servers = serverPool.ActiveServers.ToList();
+
+            if (servers.Count == 0)
+            {
+                if (requestId is not null)
+                    await SendResponseAsync(stdout, stdoutLock, requestId, new JsonArray());
+            }
+            else
+            {
+                var responses = await Task.WhenAll(servers.Select(s => s.SendAndReceiveAsync(raw)));
+                var merged = new JsonArray();
+                foreach (var resp in responses)
+                {
+                    var parsed = JsonSerializer.Deserialize<JsonObject>(resp);
+                    if (parsed?["result"] is JsonArray arr)
+                        foreach (var item in arr)
+                            merged.Add(item?.DeepClone());
+                }
+                if (requestId is not null)
+                    await SendResponseAsync(stdout, stdoutLock, requestId, merged);
+            }
+        }
+        else if (method == "workspace/didChangeWatchedFiles")
+        {
+            var changes = message["params"]?["changes"]?.AsArray();
+            if (changes is not null)
+            {
+                foreach (var change in changes)
+                {
+                    var uriStr = change?["uri"]?.GetValue<string>();
+                    if (uriStr is null) continue;
+                    var path = new Uri(uriStr).LocalPath;
+                    var ext = Path.GetExtension(path);
+                    if (ext is ".sln" or ".slnx" or ".csproj")
+                        router.InvalidateCache(path);
                 }
             }
         }
@@ -65,7 +132,7 @@ try
             var id = message["id"];
             await serverPool.DisposeAllAsync();
             poolDrained = true;
-            await SendResponseAsync(stdout, id, JsonValue.Create<object?>(null)!);
+            await SendResponseAsync(stdout, stdoutLock, id, JsonValue.Create<object?>(null)!);
         }
         else if (method == "exit")
         {
@@ -121,7 +188,9 @@ static async Task<string?> ReadLineAsync(Stream stream)
     }
 }
 
-static async Task SendResponseAsync(Stream stream, JsonNode? id, JsonNode result)
+static string JsonNodeToKey(JsonNode node) => node.ToJsonString();
+
+static async Task SendResponseAsync(Stream stream, SemaphoreSlim streamLock, JsonNode? id, JsonNode result)
 {
     var response = new JsonObject
     {
@@ -134,7 +203,15 @@ static async Task SendResponseAsync(Stream stream, JsonNode? id, JsonNode result
     var body = Encoding.UTF8.GetBytes(json);
     var header = Encoding.UTF8.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
 
-    await stream.WriteAsync(header);
-    await stream.WriteAsync(body);
-    await stream.FlushAsync();
+    await streamLock.WaitAsync();
+    try
+    {
+        await stream.WriteAsync(header);
+        await stream.WriteAsync(body);
+        await stream.FlushAsync();
+    }
+    finally
+    {
+        streamLock.Release();
+    }
 }

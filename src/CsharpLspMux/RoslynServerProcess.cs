@@ -16,6 +16,8 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly Stream _stdin;
     private readonly Stream _stdout;
     private readonly Stream _responseOut;
+    // Shared across all RoslynServerProcess instances writing to the same responseOut stream.
+    private readonly SemaphoreSlim _responseOutLock;
 
     private readonly TaskCompletionSource _initializedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ConcurrentQueue<byte[]> _pendingQueue = new();
@@ -24,18 +26,22 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _readerTask;
 
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<byte[]>> _pending = new();
+    private int _syntheticIdCounter;
+
     public bool IsInitialized => _initializedTcs.Task.IsCompleted;
 
-    private RoslynServerProcess(Process process, Stream responseOut)
+    private RoslynServerProcess(Process process, Stream responseOut, SemaphoreSlim responseOutLock)
     {
         _process = process;
         _stdin = process.StandardInput.BaseStream;
         _stdout = process.StandardOutput.BaseStream;
         _responseOut = responseOut;
+        _responseOutLock = responseOutLock;
         _readerTask = Task.Run(ReadLoopAsync);
     }
 
-    public static RoslynServerProcess Start(string solutionPath, Stream responseOut)
+    public static RoslynServerProcess Start(string solutionPath, Stream responseOut, SemaphoreSlim responseOutLock)
     {
         var solutionDir = Path.GetDirectoryName(solutionPath)!;
 
@@ -49,7 +55,7 @@ public sealed class RoslynServerProcess : IChildServer
         };
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start roslyn-language-server");
-        var server = new RoslynServerProcess(process, responseOut);
+        var server = new RoslynServerProcess(process, responseOut, responseOutLock);
         server.SendInitialize(solutionPath, solutionDir);
         return server;
     }
@@ -109,12 +115,21 @@ public sealed class RoslynServerProcess : IChildServer
                     continue;
                 }
 
+                // Intercept responses to send-and-receive calls before relaying.
+                var rawBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+                if (message["id"] is JsonNode idNode && method is null)
+                {
+                    var idStr = idNode.ToJsonString();
+                    if (_pending.TryGetValue(idStr, out var tcs))
+                    {
+                        tcs.TrySetResult(rawBytes);
+                        continue;
+                    }
+                }
+
                 // Relay responses and notifications back to the client (stdout of proxy)
                 if (message["id"] is not null || method is not null)
-                {
-                    var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-                    await WriteResponseToClientAsync(raw);
-                }
+                    await WriteResponseToClientAsync(rawBytes);
             }
         }
         catch (OperationCanceledException) { }
@@ -133,7 +148,7 @@ public sealed class RoslynServerProcess : IChildServer
     private async Task WriteResponseToClientAsync(byte[] body)
     {
         var header = Encoding.UTF8.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
-        await _writeLock.WaitAsync();
+        await _responseOutLock.WaitAsync();
         try
         {
             await _responseOut.WriteAsync(header);
@@ -142,7 +157,7 @@ public sealed class RoslynServerProcess : IChildServer
         }
         finally
         {
-            _writeLock.Release();
+            _responseOutLock.Release();
         }
     }
 
@@ -203,6 +218,32 @@ public sealed class RoslynServerProcess : IChildServer
             var ch = (char)buf[0];
             if (ch == '\n') return sb.ToString().TrimEnd('\r');
             sb.Append(ch);
+        }
+    }
+
+    public async Task<byte[]> SendAndReceiveAsync(byte[] frame)
+    {
+        _cts.Token.ThrowIfCancellationRequested();
+
+        // Rewrite the request id to a synthetic one so we can correlate the response.
+        var request = JsonSerializer.Deserialize<JsonObject>(frame)!;
+        var syntheticId = $"__mux_{Interlocked.Increment(ref _syntheticIdCounter)}";
+        request["id"] = syntheticId;
+        var rewritten = SerializeFrame(request);
+
+        var tcs = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pending[syntheticId] = tcs;
+
+        // Cancel the TCS if the server is disposed before a response arrives.
+        using var reg = _cts.Token.Register(() => tcs.TrySetCanceled());
+        try
+        {
+            await ForwardRequestAsync(rewritten);
+            return await tcs.Task;
+        }
+        finally
+        {
+            _pending.TryRemove(syntheticId, out _);
         }
     }
 
