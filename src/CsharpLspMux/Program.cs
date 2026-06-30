@@ -11,6 +11,12 @@ if (args.Length == 1 && args[0] == "--version")
     return;
 }
 
+if (args.Length >= 1 && args[0] == "config")
+{
+    var workingDir = Environment.GetEnvironmentVariable("REPO_ROOT") ?? Directory.GetCurrentDirectory();
+    Environment.Exit(ConfigCommand.Run(args[1..], workingDir));
+}
+
 var stdinReader = new LspFrameReader(Console.OpenStandardInput());
 var lspTransport = new LspTransport(Console.OpenStandardOutput());
 
