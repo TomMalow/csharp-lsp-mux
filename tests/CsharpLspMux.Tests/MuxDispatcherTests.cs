@@ -99,6 +99,33 @@ public class MuxDispatcherTests
     }
 
     [Fact]
+    public async Task Initialize_CapabilitiesContainRoslynSuperset()
+    {
+        var (dispatcher, transport, _, _) = Make();
+        var msg = Msg("initialize", id: JsonValue.Create(1));
+
+        await dispatcher.HandleMessageAsync(msg);
+
+        var caps = transport.Responses[0].Result["capabilities"] as JsonObject;
+        Assert.NotNull(caps);
+        Assert.True(caps["hoverProvider"]?.GetValue<bool>());
+        Assert.True(caps["definitionProvider"]?.GetValue<bool>());
+        Assert.True(caps["referencesProvider"]?.GetValue<bool>());
+        Assert.True(caps["documentSymbolProvider"]?.GetValue<bool>());
+        Assert.True(caps["workspaceSymbolProvider"]?.GetValue<bool>());
+        Assert.True(caps["renameProvider"]?.GetValue<bool>());
+        Assert.True(caps["codeActionProvider"]?.GetValue<bool>());
+        Assert.True(caps["textDocumentSync"]?["openClose"]?.GetValue<bool>());
+        Assert.Equal(2, caps["textDocumentSync"]?["change"]?.GetValue<int>());
+        var completionTriggers = caps["completionProvider"]!["triggerCharacters"]!.AsArray().Select(n => n!.GetValue<string>());
+        Assert.Contains(".", completionTriggers);
+        var signatureTriggers = caps["signatureHelpProvider"]!["triggerCharacters"]!.AsArray().Select(n => n!.GetValue<string>());
+        Assert.Contains("(", signatureTriggers);
+        Assert.True(caps["diagnosticProvider"]?["interFileDependencies"]?.GetValue<bool>());
+        Assert.False(caps["diagnosticProvider"]?["workspaceDiagnostics"]?.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task Initialized_NoResponse_ReturnsTrue()
     {
         var (dispatcher, transport, _, _) = Make();

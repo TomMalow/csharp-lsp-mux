@@ -21,7 +21,30 @@ public sealed class MuxDispatcher(
             var id = message["id"];
             await transport.SendResponseAsync(id, new JsonObject
             {
-                ["capabilities"] = new JsonObject(),
+                ["capabilities"] = new JsonObject
+                {
+                    ["textDocumentSync"] = new JsonObject { ["openClose"] = true, ["change"] = 2 },
+                    ["hoverProvider"] = true,
+                    ["definitionProvider"] = true,
+                    ["referencesProvider"] = true,
+                    ["documentSymbolProvider"] = true,
+                    ["workspaceSymbolProvider"] = true,
+                    ["completionProvider"] = new JsonObject
+                    {
+                        ["triggerCharacters"] = new JsonArray(".", " ")
+                    },
+                    ["signatureHelpProvider"] = new JsonObject
+                    {
+                        ["triggerCharacters"] = new JsonArray("(", ",")
+                    },
+                    ["renameProvider"] = true,
+                    ["codeActionProvider"] = true,
+                    ["diagnosticProvider"] = new JsonObject
+                    {
+                        ["interFileDependencies"] = true,
+                        ["workspaceDiagnostics"] = false
+                    }
+                },
                 ["serverInfo"] = new JsonObject
                 {
                     ["name"] = "csharp-lsp-mux",
