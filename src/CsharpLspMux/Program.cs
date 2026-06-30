@@ -4,8 +4,9 @@ var stdinReader = new LspFrameReader(Console.OpenStandardInput());
 var lspTransport = new LspTransport(Console.OpenStandardOutput());
 
 var repoRoot = Environment.GetEnvironmentVariable("REPO_ROOT") ?? Directory.GetCurrentDirectory();
+var config = new MuxConfig(repoRoot);
 var router = new SolutionRouter(repoRoot);
-var pool = ServerPool<IChildServer>.FromEnvironment(
+var pool = new ServerPool<IChildServer>(config.MaxServers,
     sln => Task.FromResult<IChildServer>(RoslynServerProcess.Start(sln, lspTransport)));
 var dispatcher = new MuxDispatcher(router, pool, lspTransport);
 pool.OnEvict = dispatcher.NotifyEviction;
