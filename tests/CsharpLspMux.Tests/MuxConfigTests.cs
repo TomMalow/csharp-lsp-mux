@@ -9,8 +9,11 @@ public sealed class MuxConfigTests
     public void NoFile_MaxServers_DefaultsTen()
     {
         using var dir = TempDir();
-        var config = new MuxConfig(dir.Path);
-        Assert.Equal(10, config.MaxServers);
+        WithEnv("LSP_ROUTER_MAX_SERVERS", null, () =>
+        {
+            var config = new MuxConfig(dir.Path, userConfigPath: NoUserConfig);
+            Assert.Equal(10, config.MaxServers);
+        });
     }
 
     [Fact]
@@ -18,8 +21,11 @@ public sealed class MuxConfigTests
     {
         using var dir = TempDir();
         File.WriteAllText(Path.Combine(dir.Path, ".csharp-lsp-mux.json"), """{"maxServers":5}""");
-        var config = new MuxConfig(dir.Path);
-        Assert.Equal(5, config.MaxServers);
+        WithEnv("LSP_ROUTER_MAX_SERVERS", null, () =>
+        {
+            var config = new MuxConfig(dir.Path, userConfigPath: NoUserConfig);
+            Assert.Equal(5, config.MaxServers);
+        });
     }
 
     [Fact]
@@ -28,7 +34,7 @@ public sealed class MuxConfigTests
         using var dir = TempDir();
         WithEnv("LSP_ROUTER_MAX_SERVERS", "3", () =>
         {
-            var config = new MuxConfig(dir.Path);
+            var config = new MuxConfig(dir.Path, userConfigPath: NoUserConfig);
             Assert.Equal(3, config.MaxServers);
         });
     }
@@ -40,7 +46,7 @@ public sealed class MuxConfigTests
         File.WriteAllText(Path.Combine(dir.Path, ".csharp-lsp-mux.json"), """{"maxServers":5}""");
         WithEnv("LSP_ROUTER_MAX_SERVERS", "3", () =>
         {
-            var config = new MuxConfig(dir.Path);
+            var config = new MuxConfig(dir.Path, userConfigPath: NoUserConfig);
             Assert.Equal(3, config.MaxServers);
         });
     }
@@ -50,13 +56,68 @@ public sealed class MuxConfigTests
     {
         using var dir = TempDir();
         File.WriteAllText(Path.Combine(dir.Path, ".csharp-lsp-mux.json"), "not json {{{");
-        var config = new MuxConfig(dir.Path);
-        Assert.Equal(10, config.MaxServers);
+        WithEnv("LSP_ROUTER_MAX_SERVERS", null, () =>
+        {
+            var config = new MuxConfig(dir.Path, userConfigPath: NoUserConfig);
+            Assert.Equal(10, config.MaxServers);
+        });
+    }
+
+    [Fact]
+    public void UserFile_MaxServers_UsesUserValue()
+    {
+        using var repoDir = TempDir();
+        using var userDir = TempDir();
+        var userConfigPath = Path.Combine(userDir.Path, "config.json");
+        File.WriteAllText(userConfigPath, """{"maxServers":8}""");
+
+        WithEnv("LSP_ROUTER_MAX_SERVERS", null, () =>
+        {
+            var config = new MuxConfig(repoDir.Path, userConfigPath);
+            Assert.Equal(8, config.MaxServers);
+            Assert.Equal("user", config.MaxServersSource);
+        });
+    }
+
+    [Fact]
+    public void UserFileAndRepoFile_RepoWins()
+    {
+        using var repoDir = TempDir();
+        using var userDir = TempDir();
+        File.WriteAllText(Path.Combine(repoDir.Path, ".csharp-lsp-mux.json"), """{"maxServers":5}""");
+        var userConfigPath = Path.Combine(userDir.Path, "config.json");
+        File.WriteAllText(userConfigPath, """{"maxServers":8}""");
+
+        WithEnv("LSP_ROUTER_MAX_SERVERS", null, () =>
+        {
+            var config = new MuxConfig(repoDir.Path, userConfigPath);
+            Assert.Equal(5, config.MaxServers);
+            Assert.Equal("file", config.MaxServersSource);
+        });
+    }
+
+    [Fact]
+    public void EnvVarAndUserFile_EnvWins()
+    {
+        using var repoDir = TempDir();
+        using var userDir = TempDir();
+        var userConfigPath = Path.Combine(userDir.Path, "config.json");
+        File.WriteAllText(userConfigPath, """{"maxServers":8}""");
+
+        WithEnv("LSP_ROUTER_MAX_SERVERS", "3", () =>
+        {
+            var config = new MuxConfig(repoDir.Path, userConfigPath);
+            Assert.Equal(3, config.MaxServers);
+            Assert.Equal("env", config.MaxServersSource);
+        });
     }
 
     // --- helpers ---
 
-    private static void WithEnv(string key, string value, Action action)
+    private static string NoUserConfig =>
+        Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "config.json");
+
+    private static void WithEnv(string key, string? value, Action action)
     {
         var prev = Environment.GetEnvironmentVariable(key);
         Environment.SetEnvironmentVariable(key, value);

@@ -4,24 +4,30 @@ namespace CsharpLspMux;
 
 public static class ConfigCommand
 {
-    public static int Run(string[] subArgs, string workingDir)
+    public static int Run(string[] subArgs, string workingDir, string? userConfigPath = null)
     {
         if (subArgs.Length == 0)
             return Error("Usage: csharp-lsp-mux config <set|get|list> [args]");
 
+        userConfigPath ??= MuxConfig.GetUserConfigPath();
+
         return subArgs[0] switch
         {
-            "set" => RunSet(subArgs[1..], workingDir),
-            "get" => RunGet(subArgs[1..], workingDir),
-            "list" => RunList(workingDir),
+            "set" => RunSet(subArgs[1..], workingDir, userConfigPath),
+            "get" => RunGet(subArgs[1..], workingDir, userConfigPath),
+            "list" => RunList(workingDir, userConfigPath),
             _ => Error($"Unknown config subcommand: {subArgs[0]}")
         };
     }
 
-    private static int RunSet(string[] args, string workingDir)
+    private static int RunSet(string[] args, string workingDir, string userConfigPath)
     {
+        bool global = args.Length > 0 && args[0] == "--global";
+        if (global)
+            args = args[1..];
+
         if (args.Length != 2)
-            return Error("Usage: csharp-lsp-mux config set <key> <value>");
+            return Error("Usage: csharp-lsp-mux config set [--global] <key> <value>");
 
         var key = args[0];
         var valueStr = args[1];
@@ -32,7 +38,15 @@ public static class ConfigCommand
         if (!int.TryParse(valueStr, out var value) || value < 1 || value > 100)
             return Error($"Invalid value for max-servers: must be an integer between 1 and 100");
 
-        var filePath = Path.Combine(workingDir, ".csharp-lsp-mux.json");
+        var filePath = global ? userConfigPath : Path.Combine(workingDir, ".csharp-lsp-mux.json");
+
+        if (global)
+        {
+            var dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+        }
+
         JsonObject node;
         if (File.Exists(filePath))
         {
@@ -56,7 +70,7 @@ public static class ConfigCommand
         return 0;
     }
 
-    private static int RunGet(string[] args, string workingDir)
+    private static int RunGet(string[] args, string workingDir, string userConfigPath)
     {
         if (args.Length != 1)
             return Error("Usage: csharp-lsp-mux config get <key>");
@@ -65,14 +79,14 @@ public static class ConfigCommand
         if (key != "max-servers")
             return Error($"Unknown config key: {key}");
 
-        var cfg = new MuxConfig(workingDir);
+        var cfg = new MuxConfig(workingDir, userConfigPath);
         Console.WriteLine($"max-servers = {cfg.MaxServers} (source: {cfg.MaxServersSource})");
         return 0;
     }
 
-    private static int RunList(string workingDir)
+    private static int RunList(string workingDir, string userConfigPath)
     {
-        var cfg = new MuxConfig(workingDir);
+        var cfg = new MuxConfig(workingDir, userConfigPath);
         Console.WriteLine($"max-servers = {cfg.MaxServers} (source: {cfg.MaxServersSource})");
         return 0;
     }
