@@ -6,7 +6,7 @@ namespace CsharpLspMux;
 
 public sealed class MuxDispatcher(
     ISolutionRouter router,
-    ServerPool<IChildServer> pool,
+    IServerPool<IChildServer> pool,
     ILspTransport transport)
 {
     private readonly Dictionary<string, IChildServer> _requestOwners = new();

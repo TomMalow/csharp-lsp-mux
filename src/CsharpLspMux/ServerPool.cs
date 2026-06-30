@@ -5,7 +5,7 @@ namespace CsharpLspMux;
 /// Cap is read from <c>LSP_ROUTER_MAX_SERVERS</c> (default 10).
 /// When full, least-recently-used entry is evicted via DisposeAsync.
 /// </summary>
-public sealed class ServerPool<TServer> where TServer : IAsyncDisposable
+public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : IAsyncDisposable
 {
     private readonly int _cap;
     private readonly Func<string, Task<TServer>> _factory;

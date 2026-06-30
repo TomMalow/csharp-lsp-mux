@@ -57,16 +57,34 @@ public class MuxDispatcherTests
         public ValueTask DisposeAsync() { DisposeCount++; return ValueTask.CompletedTask; }
     }
 
+    private sealed class FakeServerPool : IServerPool<IChildServer>
+    {
+        private readonly Dictionary<string, IChildServer> _servers = new();
+
+        public Task<IChildServer> GetOrAddAsync(string key)
+        {
+            if (!_servers.TryGetValue(key, out var server))
+            {
+                server = new FakeServer();
+                _servers[key] = server;
+            }
+            return Task.FromResult(server);
+        }
+
+        public IEnumerable<IChildServer> ActiveServers => _servers.Values;
+
+        public Task DisposeAllAsync() => Task.CompletedTask;
+    }
+
     // --- helpers ---
 
-    private static (MuxDispatcher dispatcher, FakeTransport transport, FakeRouter router, ServerPool<IChildServer> pool)
+    private static (MuxDispatcher dispatcher, FakeTransport transport, FakeRouter router, FakeServerPool pool)
         Make(string? routeResult = null)
     {
         var transport = new FakeTransport();
         var router = new FakeRouter { RouteResult = routeResult };
-        var pool = new ServerPool<IChildServer>(10, _ => Task.FromResult<IChildServer>(new FakeServer()));
+        var pool = new FakeServerPool();
         var dispatcher = new MuxDispatcher(router, pool, transport);
-        pool.OnEvict = dispatcher.NotifyEviction;
         return (dispatcher, transport, router, pool);
     }
 
