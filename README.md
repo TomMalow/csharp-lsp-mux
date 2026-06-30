@@ -34,36 +34,104 @@ csharp-lsp-mux --version
 
 ## Claude Code Plugin Setup
 
-In your consumer repo (e.g. your mono-repo), create a plugin:
+### Option A: Local marketplace (recommended)
+
+Create a local marketplace so `csharp-lsp-mux` is available across all your C# projects.
+
+**1. Create the marketplace directory:**
 
 ```
-.claude/plugins/csharp-lsp-mux/
+~/.claude/plugins/marketplaces/csharp-lsp-mux/
 ├── .claude-plugin/
-│   └── plugin.json
-└── .lsp.json
+│   └── marketplace.json
+└── plugins/
+    └── csharp-lsp-mux/
+        └── .claude-plugin/
+            └── plugin.json
 ```
 
-`plugin.json`:
+**2. `marketplace.json`:**
+
 ```json
 {
-  "name": "csharp-lsp-mux"
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "csharp-lsp-mux-local",
+  "description": "Local C# LSP multiplexer plugin",
+  "owner": { "name": "local" },
+  "plugins": [
+    {
+      "name": "csharp-lsp-mux",
+      "description": "C# LSP multiplexer routing to per-solution Roslyn servers",
+      "version": "1.0.0",
+      "author": { "name": "local" },
+      "category": "development",
+      "source": "./plugins/csharp-lsp-mux",
+      "lspServers": {
+        "csharp": {
+          "command": "csharp-lsp-mux",
+          "extensionToLanguage": { ".cs": "csharp" },
+          "env": { "LSP_ROUTER_MAX_SERVERS": "10" }
+        }
+      }
+    }
+  ]
 }
 ```
 
-`.lsp.json`:
+**3. `plugins/csharp-lsp-mux/.claude-plugin/plugin.json`:**
+
 ```json
 {
-  "csharp": {
-    "command": "csharp-lsp-mux",
-    "extensionToLanguage": {
-      ".cs": "csharp"
-    },
-    "env": {
-      "LSP_ROUTER_MAX_SERVERS": "10"
+  "name": "csharp-lsp-mux",
+  "description": "C# LSP multiplexer routing to per-solution Roslyn servers",
+  "version": "1.0.0",
+  "lspServers": {
+    "csharp": {
+      "command": "csharp-lsp-mux",
+      "extensionToLanguage": { ".cs": "csharp" },
+      "env": { "LSP_ROUTER_MAX_SERVERS": "10" }
     }
   }
 }
 ```
+
+**4. Register the marketplace** by adding an entry to `~/.claude/plugins/known_marketplaces.json`:
+
+```json
+{
+  "csharp-lsp-mux-local": {
+    "source": { "source": "github", "repo": "local/csharp-lsp-mux" },
+    "installLocation": "/Users/you/.claude/plugins/marketplaces/csharp-lsp-mux",
+    "lastUpdated": "2026-01-01T00:00:00.000Z"
+  }
+}
+```
+
+**5. Enable the plugin** in `~/.claude/settings.json`:
+
+```json
+{
+  "enabledPlugins": {
+    "csharp-lsp-mux@csharp-lsp-mux-local": true
+  }
+}
+```
+
+**6. Disable the official `csharp-lsp` plugin** (if enabled) to avoid `.cs` file conflicts:
+
+```json
+{
+  "enabledPlugins": {
+    "csharp-lsp@claude-plugins-official": false
+  }
+}
+```
+
+### Prerequisites
+
+- `csharp-lsp-mux` installed as a dotnet global tool and on PATH
+- `roslyn-language-server` on PATH (ships with C# Dev Kit or install via `dotnet tool install --global Microsoft.CodeAnalysis.LanguageServer`)
+- The official `csharp-lsp` plugin disabled to avoid conflicts on `.cs` extension
 
 ## Configuration
 
