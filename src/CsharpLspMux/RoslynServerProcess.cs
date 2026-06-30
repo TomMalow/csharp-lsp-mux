@@ -12,10 +12,10 @@ namespace CsharpLspMux;
 /// </summary>
 public sealed class RoslynServerProcess : IChildServer
 {
-    private readonly Process _process;
     private readonly Stream _stdin;
     private readonly IFrameReader _reader;
     private readonly ILspTransport _clientTransport;
+    private readonly Func<Task>? _onDispose;
 
     private readonly InitBarrier _gate = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -25,17 +25,25 @@ public sealed class RoslynServerProcess : IChildServer
 
     private readonly ConcurrentDictionary<string, TaskCompletionSource<byte[]>> _pending = new();
     private int _syntheticIdCounter;
+    private int _disposed;
 
     public bool IsInitialized => _gate.IsInitialized;
 
-    private RoslynServerProcess(Process process, ILspTransport clientTransport)
+    private RoslynServerProcess(Stream stdin, IFrameReader reader, ILspTransport clientTransport, Func<Task>? onDispose)
     {
-        _process = process;
-        _stdin = process.StandardInput.BaseStream;
-        _reader = new LspFrameReader(process.StandardOutput.BaseStream);
+        _stdin = stdin;
+        _reader = reader;
         _clientTransport = clientTransport;
+        _onDispose = onDispose;
         _readerTask = Task.Run(ReadLoopAsync);
     }
+
+    internal static RoslynServerProcess CreateForTest(
+        Stream stdin,
+        IFrameReader reader,
+        ILspTransport clientTransport,
+        Func<Task>? onDispose = null)
+        => new(stdin, reader, clientTransport, onDispose);
 
     public static RoslynServerProcess Start(string solutionPath, ILspTransport clientTransport)
     {
@@ -51,7 +59,19 @@ public sealed class RoslynServerProcess : IChildServer
         };
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start roslyn-language-server");
-        var server = new RoslynServerProcess(process, clientTransport);
+        var server = new RoslynServerProcess(
+            process.StandardInput.BaseStream,
+            new LspFrameReader(process.StandardOutput.BaseStream),
+            clientTransport,
+            async () =>
+            {
+                if (!process.HasExited)
+                {
+                    if (!process.WaitForExit(500))
+                        process.Kill();
+                }
+                process.Dispose();
+            });
         server.SendInitialize(solutionPath, solutionDir);
         return server;
     }
@@ -78,9 +98,6 @@ public sealed class RoslynServerProcess : IChildServer
         _ = WriteFrameAsync(SerializeFrame(initRequest));
     }
 
-    /// <summary>
-    /// Forwards a raw JSON-RPC request frame. Queued until initialized if not yet ready.
-    /// </summary>
     public async Task ForwardRequestAsync(byte[] frame)
     {
         if (!IsInitialized)
@@ -170,8 +187,11 @@ public sealed class RoslynServerProcess : IChildServer
         request["id"] = syntheticId;
         var rewritten = SerializeFrame(request);
 
+        // ToJsonString() preserves the JSON-quoted form that ReadLoopAsync extracts from responses.
+        var pendingKey = request["id"]!.ToJsonString();
+
         var tcs = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _pending[syntheticId] = tcs;
+        _pending[pendingKey] = tcs;
 
         // Cancel the TCS if the server is disposed before a response arrives.
         using var reg = _cts.Token.Register(() => tcs.TrySetCanceled());
@@ -182,7 +202,7 @@ public sealed class RoslynServerProcess : IChildServer
         }
         finally
         {
-            _pending.TryRemove(syntheticId, out _);
+            _pending.TryRemove(pendingKey, out _);
         }
     }
 
@@ -207,18 +227,15 @@ public sealed class RoslynServerProcess : IChildServer
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
         await _cts.CancelAsync();
 
-        if (!_process.HasExited)
-        {
-            try { await ShutdownAsync(); } catch { }
-            await Task.Delay(500);
-            if (!_process.HasExited)
-                _process.Kill();
-        }
-
         try { await _readerTask; } catch { }
-        _process.Dispose();
+
+        if (_onDispose is not null)
+            await _onDispose();
+
         _cts.Dispose();
         _writeLock.Dispose();
     }
