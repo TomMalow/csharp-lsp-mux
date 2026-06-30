@@ -64,6 +64,13 @@ public class RoslynServerProcessTests
         ["id"] = id
     };
 
+    private static JsonObject MakeInitializeResponse() => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["id"] = 0,
+        ["result"] = new JsonObject { ["capabilities"] = new JsonObject() }
+    };
+
     private static (RoslynServerProcess Server, MemoryStream Stdin) MakeServerWithStdin(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null)
     {
         var stdin = new MemoryStream();
@@ -90,10 +97,33 @@ public class RoslynServerProcessTests
         await Task.Delay(20, ct);
         Assert.False(forwardTask.IsCompleted);
 
-        reader.Enqueue(MakeNotification("initialized"));
+        reader.Enqueue(MakeInitializeResponse());
         await forwardTask.WaitAsync(ct);
 
         Assert.True(stdin.Length > 0, "frame must be written to stdin after init");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task InitializeResponse_SendsInitializedNotificationToServer()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var stdin = new MemoryStream();
+        await using var server = RoslynServerProcess.CreateForTest(stdin, reader, transport);
+
+        // Queue a pending request so we can use its completion as a sync point:
+        // gate opens only after WriteFrameAsync("initialized") has already returned.
+        var frame = MakeFrame(MakeNotification("textDocument/didOpen"));
+        var forwardTask = server.ForwardRequestAsync(frame);
+
+        reader.Enqueue(MakeInitializeResponse());
+        await forwardTask.WaitAsync(ct);
+
+        var written = Encoding.UTF8.GetString(stdin.ToArray());
+        Assert.Contains("\"method\":\"initialized\"", written);
 
         reader.Complete();
     }
@@ -106,7 +136,7 @@ public class RoslynServerProcessTests
         var transport = new FakeTransport();
         await using var server = MakeServer(reader, transport);
 
-        reader.Enqueue(MakeNotification("initialized"));
+        reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(20, ct);
 
         var request = MakeFrame(MakeRequest("workspace/symbol", 42));
@@ -132,7 +162,7 @@ public class RoslynServerProcessTests
         var transport = new FakeTransport();
         await using var server = MakeServer(reader, transport);
 
-        reader.Enqueue(MakeNotification("initialized"));
+        reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(20, ct);
 
         var t1 = server.SendAndReceiveAsync(MakeFrame(MakeRequest("workspace/symbol", 1)));
@@ -176,7 +206,7 @@ public class RoslynServerProcessTests
         var transport = new FakeTransport();
         await using var server = MakeServer(reader, transport);
 
-        reader.Enqueue(MakeNotification("initialized"));
+        reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(20, ct);
 
         // Push a notification (no id match in pending) — should relay to client
