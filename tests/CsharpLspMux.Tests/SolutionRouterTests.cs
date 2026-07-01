@@ -121,7 +121,7 @@ public sealed class SolutionRouterTests : IDisposable
     }
 
     [Fact]
-    public void InvalidateCache_AfterInvalidation_ReResolvesOnNextRoute()
+    public void NotifyFileChanged_AfterInvalidation_ReResolvesOnNextRoute()
     {
         var serviceDir = MakeDir("src", "MyService");
         var csFile = MakeFile(serviceDir, "Foo.cs");
@@ -131,7 +131,7 @@ public sealed class SolutionRouterTests : IDisposable
         Assert.Null(before);
 
         var slnPath = MakeFile(serviceDir, "MyService.sln");
-        router.InvalidateCache(slnPath);
+        router.NotifyFileChanged(slnPath);
         var after = router.Route(csFile);
 
         Assert.Equal(slnPath, after);
@@ -201,10 +201,10 @@ public sealed class SolutionRouterTests : IDisposable
     }
 
     [Fact]
-    public void InvalidateCache_NullEntry_AlwaysEvictedSoSiblingSlnCanBeFound()
+    public void NotifyFileChanged_NullEntry_AlwaysEvictedSoSiblingSlnCanBeFound()
     {
         // Foo.cs routes to null (no solution anywhere yet).
-        // A new ServiceB.sln drops in a sibling directory — InvalidateCache fires.
+        // A new ServiceB.sln drops in a sibling directory — NotifyFileChanged fires.
         // Foo.cs's null entry must be evicted so it can re-resolve via SiblingScan.
         var serviceADir = MakeDir("src", "ServiceA");
         var fooCs = MakeFile(serviceADir, "Foo.cs");
@@ -217,14 +217,14 @@ public sealed class SolutionRouterTests : IDisposable
         var slnB = MakeFile(serviceBDir, "ServiceB.sln");
         File.WriteAllText(slnB, "Project = \"ServiceB.csproj\"");
 
-        router.InvalidateCache(slnB); // sibling dir — old code would keep null entry
+        router.NotifyFileChanged(slnB); // sibling dir — old code would keep null entry
 
         // SiblingScan should now find ServiceB.sln
         Assert.Equal(slnB, router.Route(fooCs));
     }
 
     [Fact]
-    public void InvalidateCache_SlnChange_DoesNotEvictUnrelatedService()
+    public void NotifyFileChanged_SlnChange_DoesNotEvictUnrelatedService()
     {
         // ServiceA and ServiceB are independent — invalidating ServiceA.sln
         // must leave ServiceB's cached entry intact.
@@ -243,13 +243,13 @@ public sealed class SolutionRouterTests : IDisposable
         // Remove slnB from disk — proves the result below is a cache hit, not a re-resolve.
         File.Delete(slnB);
 
-        router.InvalidateCache(slnA);
+        router.NotifyFileChanged(slnA);
 
         Assert.Equal(slnB, router.Route(barCs));
     }
 
     [Fact]
-    public void InvalidateCache_SlnChange_EvictsAffectedEntries()
+    public void NotifyFileChanged_SlnChange_EvictsAffectedEntries()
     {
         var serviceADir = MakeDir("src", "ServiceA");
         var slnA = MakeFile(serviceADir, "ServiceA.sln");
@@ -262,7 +262,7 @@ public sealed class SolutionRouterTests : IDisposable
         File.Delete(slnA);
         var slnA2 = MakeFile(serviceADir, "ServiceA.slnx");
 
-        router.InvalidateCache(slnA);
+        router.NotifyFileChanged(slnA);
 
         Assert.Equal(slnA2, router.Route(fooCs));
     }

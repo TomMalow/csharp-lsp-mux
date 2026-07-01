@@ -26,7 +26,6 @@ var router = new SolutionRouter(repoRoot);
 var pool = new ServerPool<IChildServer>(config.MaxServers,
     sln => Task.FromResult<IChildServer>(RoslynServerProcess.Start(sln, lspTransport)));
 var dispatcher = new MuxDispatcher(router, pool, lspTransport);
-pool.OnEvict = dispatcher.NotifyEviction;
 pool.OnGracefulShutdown = s => s.ShutdownAsync();
 
 while (true)

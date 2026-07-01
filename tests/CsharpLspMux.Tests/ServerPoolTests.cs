@@ -154,11 +154,11 @@ public sealed class ServerPoolTests
     }
 
     [Fact]
-    public async Task OnEvict_CalledWithEvictedServer()
+    public async Task Evicted_RaisedWithEvictedServer()
     {
         FakeServer? evicted = null;
         var pool = MakePool(2);
-        pool.OnEvict = s => evicted = s;
+        pool.Evicted += s => evicted = s;
 
         var a = await pool.GetOrAddAsync("slnA");
         await pool.GetOrAddAsync("slnB");

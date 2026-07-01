@@ -4,16 +4,28 @@ using System.Text.Json.Nodes;
 
 namespace CsharpLspMux;
 
-public sealed class MuxDispatcher(
-    ISolutionRouter router,
-    IServerPool<IChildServer> pool,
-    ILspTransport transport,
-    Func<string, Task<string>>? readFile = null)
+public sealed class MuxDispatcher
 {
-    private readonly Func<string, Task<string>> _readFile = readFile ?? (path => File.ReadAllTextAsync(path));
+    private readonly ISolutionRouter _router;
+    private readonly IServerPool<IChildServer> _pool;
+    private readonly ILspTransport _transport;
+    private readonly Func<string, Task<string>> _readFile;
     private readonly Dictionary<string, IChildServer> _requestOwners = new();
     private readonly Dictionary<IChildServer, HashSet<string>> _openedUris = new();
     private bool _poolDrained;
+
+    public MuxDispatcher(
+        ISolutionRouter router,
+        IServerPool<IChildServer> pool,
+        ILspTransport transport,
+        Func<string, Task<string>>? readFile = null)
+    {
+        _router = router;
+        _pool = pool;
+        _transport = transport;
+        _readFile = readFile ?? (path => File.ReadAllTextAsync(path));
+        pool.Evicted += NotifyEviction;
+    }
 
     public Task<bool> HandleMessageAsync(JsonObject message)
     {
@@ -35,7 +47,7 @@ public sealed class MuxDispatcher(
     private async Task<bool> HandleInitialize(JsonObject message)
     {
         var id = message["id"];
-        await transport.SendResponseAsync(id, new JsonObject
+        await _transport.SendResponseAsync(id, new JsonObject
         {
             ["capabilities"] = new JsonObject
             {
@@ -79,11 +91,11 @@ public sealed class MuxDispatcher(
             && parsedUri.IsFile)
         {
             var filePath = parsedUri.LocalPath;
-            var solutionPath = router.Route(filePath);
+            var solutionPath = _router.Route(filePath);
 
             if (solutionPath is not null)
             {
-                var server = await pool.GetOrAddAsync(solutionPath);
+                var server = await _pool.GetOrAddAsync(solutionPath);
 
                 if (method == "textDocument/didClose")
                     MarkClosed(server, uri);
@@ -100,7 +112,7 @@ public sealed class MuxDispatcher(
             else
             {
                 if (message["id"] is JsonNode requestId)
-                    await transport.SendErrorAsync(requestId, -32001, $"No solution found for file: {filePath}");
+                    await _transport.SendErrorAsync(requestId, -32001, $"No solution found for file: {filePath}");
             }
         }
         return true;
@@ -168,12 +180,12 @@ public sealed class MuxDispatcher(
     {
         var requestId = message["id"];
         var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-        var servers = pool.ActiveServers.ToList();
+        var servers = _pool.ActiveServers.ToList();
 
         if (servers.Count == 0)
         {
             if (requestId is not null)
-                await transport.SendResponseAsync(requestId, new JsonArray());
+                await _transport.SendResponseAsync(requestId, new JsonArray());
         }
         else
         {
@@ -196,7 +208,7 @@ public sealed class MuxDispatcher(
                 catch (JsonException) { }
             }
             if (requestId is not null)
-                await transport.SendResponseAsync(requestId, merged);
+                await _transport.SendResponseAsync(requestId, merged);
         }
         return true;
     }
@@ -215,7 +227,7 @@ public sealed class MuxDispatcher(
                 var path = parsedUri.LocalPath;
                 var ext = Path.GetExtension(path);
                 if (ext is ".sln" or ".slnx" or ".csproj")
-                    router.InvalidateCache(path);
+                    _router.NotifyFileChanged(path);
             }
         }
         return Task.FromResult(true);
@@ -224,20 +236,20 @@ public sealed class MuxDispatcher(
     private async Task<bool> HandleShutdown(JsonObject message)
     {
         var id = message["id"];
-        await pool.DisposeAllAsync();
+        await _pool.DisposeAllAsync();
         _poolDrained = true;
-        await transport.SendResponseAsync(id, JsonValue.Create<object?>(null)!);
+        await _transport.SendResponseAsync(id, JsonValue.Create<object?>(null)!);
         return true;
     }
 
     private async Task<bool> HandleExit(JsonObject message)
     {
         if (!_poolDrained)
-            await pool.DisposeAllAsync();
+            await _pool.DisposeAllAsync();
         return false;
     }
 
-    public void NotifyEviction(IChildServer evicted)
+    private void NotifyEviction(IChildServer evicted)
     {
         foreach (var key in _requestOwners.Keys.Where(k => _requestOwners[k] == evicted).ToList())
             _requestOwners.Remove(key);
