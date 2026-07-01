@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "microsoft.codeanalysis.languageserver": {
+      "version": "4.14.0-2.25375.6",
+      "commands": [
+        "roslyn-language-server"
+      ],
+      "rollForward": false
+    }
+  }
+}
