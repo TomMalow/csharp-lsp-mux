@@ -100,7 +100,7 @@ public sealed class MuxDispatcher(
             else
             {
                 if (message["id"] is JsonNode requestId)
-                    await transport.SendResponseAsync(requestId, JsonValue.Create<object?>(null)!);
+                    await transport.SendErrorAsync(requestId, -32001, $"No solution found for file: {filePath}");
             }
         }
         return true;

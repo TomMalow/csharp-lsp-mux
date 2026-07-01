@@ -13,9 +13,11 @@ public class MuxDispatcherTests
     {
         public readonly List<byte[]> WrittenFrames = new();
         public readonly List<(JsonNode? Id, JsonNode Result)> Responses = new();
+        public readonly List<(JsonNode? Id, int Code, string Message)> Errors = new();
 
         public Task WriteFrameAsync(byte[] frame) { WrittenFrames.Add(frame); return Task.CompletedTask; }
         public Task SendResponseAsync(JsonNode? id, JsonNode result) { Responses.Add((id, result)); return Task.CompletedTask; }
+        public Task SendErrorAsync(JsonNode? id, int code, string message) { Errors.Add((id, code, message)); return Task.CompletedTask; }
     }
 
     private sealed class FakeRouter : ISolutionRouter
@@ -173,7 +175,7 @@ public class MuxDispatcherTests
     }
 
     [Fact]
-    public async Task TextDocument_RequestWithId_NoSolution_SendsNullResult()
+    public async Task TextDocument_RequestWithId_NoSolution_SendsErrorResponse()
     {
         var (dispatcher, transport, _, _) = Make(routeResult: null);
         var msg = Msg("textDocument/hover", id: JsonValue.Create(3),
@@ -182,8 +184,12 @@ public class MuxDispatcherTests
         var result = await dispatcher.HandleMessageAsync(msg);
 
         Assert.True(result);
-        Assert.Single(transport.Responses);
-        Assert.Equal(3, transport.Responses[0].Id?.GetValue<int>());
+        Assert.Empty(transport.Responses);
+        Assert.Single(transport.Errors);
+        var (id, code, message) = transport.Errors[0];
+        Assert.Equal(3, id?.GetValue<int>());
+        Assert.Equal(-32001, code);
+        Assert.Contains("Foo.cs", message);
     }
 
     [Fact]
