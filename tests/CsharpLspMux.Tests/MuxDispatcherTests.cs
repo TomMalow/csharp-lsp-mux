@@ -79,12 +79,12 @@ public class MuxDispatcherTests
     // --- helpers ---
 
     private static (MuxDispatcher dispatcher, FakeTransport transport, FakeRouter router, FakeServerPool pool)
-        Make(string? routeResult = null)
+        Make(string? routeResult = null, Func<string, Task<string>>? readFile = null)
     {
         var transport = new FakeTransport();
         var router = new FakeRouter { RouteResult = routeResult };
         var pool = new FakeServerPool();
-        var dispatcher = new MuxDispatcher(router, pool, transport);
+        var dispatcher = new MuxDispatcher(router, pool, transport, readFile);
         return (dispatcher, transport, router, pool);
     }
 
@@ -159,7 +159,7 @@ public class MuxDispatcherTests
     public async Task TextDocument_RoutableUri_ForwardsToServer_ReturnsTrue()
     {
         var sln = "/repo/App.slnx";
-        var (dispatcher, transport, _, pool) = Make(routeResult: sln);
+        var (dispatcher, transport, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
         var server = (FakeServer)await pool.GetOrAddAsync(sln);
 
         var msg = Msg("textDocument/hover", id: JsonValue.Create(2),
@@ -168,7 +168,7 @@ public class MuxDispatcherTests
         var result = await dispatcher.HandleMessageAsync(msg);
 
         Assert.True(result);
-        Assert.Single(server.ForwardedFrames);
+        Assert.Equal(2, server.ForwardedFrames.Count); // synthesized didOpen + hover
         Assert.Empty(transport.Responses);
     }
 
@@ -204,7 +204,7 @@ public class MuxDispatcherTests
     public async Task CancelRequest_ForwardsToOwner_RemovesFromOwners_ReturnsTrue()
     {
         var sln = "/repo/App.slnx";
-        var (dispatcher, transport, _, pool) = Make(routeResult: sln);
+        var (dispatcher, transport, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
         var server = (FakeServer)await pool.GetOrAddAsync(sln);
 
         // Register a textDocument request so requestOwners has an entry
@@ -424,6 +424,139 @@ public class MuxDispatcherTests
     }
 
     [Fact]
+    public async Task TextDocument_RequestWithId_DidOpenNotSent_SynthesizesDidOpenFirst()
+    {
+        var sln = "/repo/App.slnx";
+        var filePath = "/repo/src/Foo.cs";
+        var fileContent = "class Foo {}";
+        var readFileCalls = new List<string>();
+        var (dispatcher, _, _, pool) = Make(
+            routeResult: sln,
+            readFile: path => { readFileCalls.Add(path); return Task.FromResult(fileContent); });
+        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+
+        var msg = Msg("textDocument/hover", id: JsonValue.Create(2),
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
+        await dispatcher.HandleMessageAsync(msg);
+
+        Assert.Equal(2, server.ForwardedFrames.Count);
+        var didOpen = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Equal("textDocument/didOpen", didOpen["method"]?.GetValue<string>());
+        Assert.Equal(FileUri(filePath), didOpen["params"]?["textDocument"]?["uri"]?.GetValue<string>());
+        Assert.Equal("csharp", didOpen["params"]?["textDocument"]?["languageId"]?.GetValue<string>());
+        Assert.Equal(fileContent, didOpen["params"]?["textDocument"]?["text"]?.GetValue<string>());
+        var hover = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[1])!;
+        Assert.Equal("textDocument/hover", hover["method"]?.GetValue<string>());
+        Assert.Single(readFileCalls);
+        Assert.Equal(filePath, readFileCalls[0]);
+    }
+
+    [Fact]
+    public async Task TextDocument_RequestWithId_DidOpenAlreadySent_DoesNotSynthesizeAgain()
+    {
+        var sln = "/repo/App.slnx";
+        var filePath = "/repo/src/Foo.cs";
+        var readFileCount = 0;
+        var (dispatcher, _, _, pool) = Make(
+            routeResult: sln,
+            readFile: _ => { readFileCount++; return Task.FromResult("class Foo {}"); });
+        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+
+        var didOpenMsg = Msg("textDocument/didOpen",
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
+        await dispatcher.HandleMessageAsync(didOpenMsg);
+        server.ForwardedFrames.Clear();
+
+        var hoverMsg = Msg("textDocument/hover", id: JsonValue.Create(2),
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
+        await dispatcher.HandleMessageAsync(hoverMsg);
+
+        Assert.Single(server.ForwardedFrames);
+        var hover = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Equal("textDocument/hover", hover["method"]?.GetValue<string>());
+        Assert.Equal(0, readFileCount);
+    }
+
+    [Fact]
+    public async Task TextDocument_DidOpen_MarksUriOpened_NoSynthesis()
+    {
+        var sln = "/repo/App.slnx";
+        var filePath = "/repo/src/Foo.cs";
+        var readFileCount = 0;
+        var (dispatcher, _, _, pool) = Make(
+            routeResult: sln,
+            readFile: _ => { readFileCount++; return Task.FromResult(""); });
+        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+
+        var didOpenMsg = Msg("textDocument/didOpen",
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
+        await dispatcher.HandleMessageAsync(didOpenMsg);
+
+        Assert.Single(server.ForwardedFrames);
+        var forwarded = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Equal("textDocument/didOpen", forwarded["method"]?.GetValue<string>());
+        Assert.Equal(0, readFileCount);
+    }
+
+    [Fact]
+    public async Task TextDocument_DidClose_ThenRequest_SynthesizesDidOpenAgain()
+    {
+        var sln = "/repo/App.slnx";
+        var filePath = "/repo/src/Foo.cs";
+        var readFileCount = 0;
+        var (dispatcher, _, _, pool) = Make(
+            routeResult: sln,
+            readFile: _ => { readFileCount++; return Task.FromResult("class Foo {}"); });
+        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+
+        var uri = FileUri(filePath);
+        await dispatcher.HandleMessageAsync(Msg("textDocument/didOpen",
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
+        await dispatcher.HandleMessageAsync(Msg("textDocument/didClose",
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
+        server.ForwardedFrames.Clear();
+
+        await dispatcher.HandleMessageAsync(Msg("textDocument/hover", id: JsonValue.Create(3),
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
+
+        Assert.Equal(2, server.ForwardedFrames.Count);
+        var synthesized = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Equal("textDocument/didOpen", synthesized["method"]?.GetValue<string>());
+        Assert.Equal(1, readFileCount);
+    }
+
+    [Fact]
+    public async Task NotifyEviction_ClearsOpenedUris_SynthesizesOnNextRequest()
+    {
+        var sln = "/repo/App.slnx";
+        var filePath = "/repo/src/Foo.cs";
+        var readFileCount = 0;
+        var transport = new FakeTransport();
+        var router = new FakeRouter { RouteResult = sln };
+        var server = new FakeServer();
+        var pool = new ServerPool<IChildServer>(10, _ => Task.FromResult<IChildServer>(server));
+        var dispatcher = new MuxDispatcher(router, pool, transport,
+            _ => { readFileCount++; return Task.FromResult("class Foo {}"); });
+        pool.OnEvict = dispatcher.NotifyEviction;
+        await pool.GetOrAddAsync(sln);
+
+        var uri = FileUri(filePath);
+        await dispatcher.HandleMessageAsync(Msg("textDocument/didOpen",
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
+        server.ForwardedFrames.Clear();
+
+        dispatcher.NotifyEviction(server);
+
+        await dispatcher.HandleMessageAsync(Msg("textDocument/hover", id: JsonValue.Create(4),
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
+
+        Assert.Equal(2, server.ForwardedFrames.Count);
+        var synthesized = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Equal("textDocument/didOpen", synthesized["method"]?.GetValue<string>());
+        Assert.Equal(1, readFileCount);
+    }
+
+    [Fact]
     public async Task NotifyEviction_RemovesEvictedServerEntries()
     {
         var sln = "/repo/App.slnx";
@@ -431,7 +564,7 @@ public class MuxDispatcherTests
         var router = new FakeRouter { RouteResult = sln };
         var server = new FakeServer();
         var pool = new ServerPool<IChildServer>(10, _ => Task.FromResult<IChildServer>(server));
-        var dispatcher = new MuxDispatcher(router, pool, transport);
+        var dispatcher = new MuxDispatcher(router, pool, transport, _ => Task.FromResult(""));
         pool.OnEvict = dispatcher.NotifyEviction;
 
         // Forward a textDocument request to register in requestOwners

@@ -7,9 +7,12 @@ namespace CsharpLspMux;
 public sealed class MuxDispatcher(
     ISolutionRouter router,
     IServerPool<IChildServer> pool,
-    ILspTransport transport)
+    ILspTransport transport,
+    Func<string, Task<string>>? readFile = null)
 {
+    private readonly Func<string, Task<string>> _readFile = readFile ?? (path => File.ReadAllTextAsync(path));
     private readonly Dictionary<string, IChildServer> _requestOwners = new();
+    private readonly Dictionary<IChildServer, HashSet<string>> _openedUris = new();
     private bool _poolDrained;
 
     public Task<bool> HandleMessageAsync(JsonObject message)
@@ -69,6 +72,7 @@ public sealed class MuxDispatcher(
 
     private async Task<bool> HandleTextDocument(JsonObject message)
     {
+        var method = message["method"]?.GetValue<string>();
         var uri = message["params"]?["textDocument"]?["uri"]?.GetValue<string>();
         if (uri is not null
             && Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri)
@@ -80,6 +84,14 @@ public sealed class MuxDispatcher(
             if (solutionPath is not null)
             {
                 var server = await pool.GetOrAddAsync(solutionPath);
+
+                if (method == "textDocument/didClose")
+                    MarkClosed(server, uri);
+                else if (method == "textDocument/didOpen")
+                    MarkOpened(server, uri);
+                else if (message["id"] is not null && !IsOpened(server, uri))
+                    await EnsureOpenAsync(server, uri, filePath);
+
                 var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
                 if (message["id"] is JsonNode requestId)
                     _requestOwners[JsonNodeToKey(requestId)] = server;
@@ -92,6 +104,48 @@ public sealed class MuxDispatcher(
             }
         }
         return true;
+    }
+
+    private void MarkOpened(IChildServer server, string uri)
+    {
+        if (!_openedUris.TryGetValue(server, out var set))
+            _openedUris[server] = set = new HashSet<string>();
+        set.Add(uri);
+    }
+
+    private void MarkClosed(IChildServer server, string uri)
+    {
+        if (_openedUris.TryGetValue(server, out var set))
+            set.Remove(uri);
+    }
+
+    private bool IsOpened(IChildServer server, string uri) =>
+        _openedUris.TryGetValue(server, out var set) && set.Contains(uri);
+
+    private async Task EnsureOpenAsync(IChildServer server, string uri, string filePath)
+    {
+        string text;
+        try { text = await _readFile(filePath); }
+        catch (Exception) { text = ""; }
+
+        var didOpen = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "textDocument/didOpen",
+            ["params"] = new JsonObject
+            {
+                ["textDocument"] = new JsonObject
+                {
+                    ["uri"] = uri,
+                    ["languageId"] = "csharp",
+                    ["version"] = 1,
+                    ["text"] = text
+                }
+            }
+        };
+        var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(didOpen));
+        await server.ForwardRequestAsync(raw);
+        MarkOpened(server, uri);
     }
 
     private async Task<bool> HandleCancelRequest(JsonObject message)
@@ -187,6 +241,7 @@ public sealed class MuxDispatcher(
     {
         foreach (var key in _requestOwners.Keys.Where(k => _requestOwners[k] == evicted).ToList())
             _requestOwners.Remove(key);
+        _openedUris.Remove(evicted);
     }
 
     private static string JsonNodeToKey(JsonNode node) => node.ToJsonString();
