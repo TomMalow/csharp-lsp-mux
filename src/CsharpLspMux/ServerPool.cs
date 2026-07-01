@@ -18,6 +18,12 @@ public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : I
     /// </summary>
     public Action<TServer>? OnEvict { get; set; }
 
+    /// <summary>
+    /// Called before DisposeAsync on each server during session drain. Use for graceful LSP shutdown.
+    /// Not called on LRU eviction.
+    /// </summary>
+    public Func<TServer, Task>? OnGracefulShutdown { get; set; }
+
     public ServerPool(int cap, Func<string, Task<TServer>> factory)
     {
         _cap = cap;
@@ -54,6 +60,8 @@ public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : I
         _index.Clear();
         await Task.WhenAll(servers.Select(async s =>
         {
+            if (OnGracefulShutdown is { } shutdown)
+                try { await shutdown(s); } catch { }
             try { await s.DisposeAsync(); } catch { }
         }));
     }

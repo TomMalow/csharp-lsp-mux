@@ -11,6 +11,8 @@ public sealed class ServerPoolTests
     private sealed class FakeServer : IChildServer
     {
         public int DisposeCount;
+        public int ShutdownCount;
+        public int ShutdownBeforeDisposeCount;
         public byte[]? LastSentFrame;
 
         public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
@@ -31,7 +33,13 @@ public sealed class ServerPoolTests
             return Task.FromResult(body);
         }
 
-        public Task ShutdownAsync() => Task.CompletedTask;
+        public Task ShutdownAsync()
+        {
+            ShutdownCount++;
+            if (DisposeCount == 0) ShutdownBeforeDisposeCount++;
+            return Task.CompletedTask;
+        }
+
         public ValueTask DisposeAsync() { DisposeCount++; return ValueTask.CompletedTask; }
     }
 
@@ -157,6 +165,36 @@ public sealed class ServerPoolTests
         await pool.GetOrAddAsync("slnC"); // evicts slnA
 
         Assert.Same(a, evicted);
+    }
+
+    [Fact]
+    public async Task DisposeAll_CallsShutdownBeforeDispose_OnEachServer()
+    {
+        var pool = MakePool(10);
+        pool.OnGracefulShutdown = s => s.ShutdownAsync();
+        var a = await pool.GetOrAddAsync("slnA");
+        var b = await pool.GetOrAddAsync("slnB");
+
+        await pool.DisposeAllAsync();
+
+        Assert.Equal(1, a.ShutdownCount);
+        Assert.Equal(1, b.ShutdownCount);
+        Assert.Equal(1, a.ShutdownBeforeDisposeCount);
+        Assert.Equal(1, b.ShutdownBeforeDisposeCount);
+    }
+
+    [Fact]
+    public async Task Evict_DoesNotCallShutdown()
+    {
+        var pool = MakePool(2);
+        pool.OnGracefulShutdown = s => s.ShutdownAsync();
+        var a = await pool.GetOrAddAsync("slnA");
+        await pool.GetOrAddAsync("slnB");
+
+        await pool.GetOrAddAsync("slnC"); // evicts slnA (LRU)
+
+        Assert.Equal(0, a.ShutdownCount);
+        Assert.Equal(1, a.DisposeCount);
     }
 
 }
