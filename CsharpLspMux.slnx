@@ -4,5 +4,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/CsharpLspMux.Tests/CsharpLspMux.Tests.csproj" />
+    <Project Path="tests/CsharpLspMux.E2ETests/CsharpLspMux.E2ETests.csproj" />
   </Folder>
 </Solution>
