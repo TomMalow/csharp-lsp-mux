@@ -1,0 +1,7 @@
+<Project>
+  <!-- Fixtures are standalone test data; opt out of repo-wide NuGet constraints -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+</Project>
