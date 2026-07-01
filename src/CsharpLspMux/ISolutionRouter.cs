@@ -12,5 +12,5 @@ public interface ISolutionRouter
     /// Only entries whose resolved solution directory shares a directory prefix
     /// with <paramref name="changedPath"/> are removed; unrelated solutions are preserved.
     /// </summary>
-    void InvalidateCache(string changedPath);
+    void NotifyFileChanged(string changedPath);
 }

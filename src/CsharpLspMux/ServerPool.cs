@@ -14,9 +14,9 @@ public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : I
     private readonly Dictionary<string, LinkedListNode<(string Key, TServer Server)>> _index = new();
 
     /// <summary>
-    /// Called synchronously when a server is evicted by LRU. Receives the evicted server instance.
+    /// Raised synchronously when a server is evicted by LRU. Not raised during DisposeAllAsync.
     /// </summary>
-    public Action<TServer>? OnEvict { get; set; }
+    public event Action<TServer>? Evicted;
 
     /// <summary>
     /// Called before DisposeAsync on each server during session drain. Use for graceful LSP shutdown.
@@ -71,7 +71,7 @@ public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : I
         var oldest = _lru.First!;
         _lru.RemoveFirst();
         _index.Remove(oldest.Value.Key);
-        OnEvict?.Invoke(oldest.Value.Server);
+        Evicted?.Invoke(oldest.Value.Server);
         try { await oldest.Value.Server.DisposeAsync(); } catch { }
     }
 }

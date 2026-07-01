@@ -23,10 +23,10 @@ public class MuxDispatcherTests
     private sealed class FakeRouter : ISolutionRouter
     {
         public string? RouteResult { get; set; }
-        public readonly List<string> InvalidatedPaths = new();
+        public readonly List<string> NotifiedPaths = new();
 
         public string? Route(string absoluteFilePath) => RouteResult;
-        public void InvalidateCache(string changedPath) => InvalidatedPaths.Add(changedPath);
+        public void NotifyFileChanged(string changedPath) => NotifiedPaths.Add(changedPath);
     }
 
     private sealed class FakeServer : IChildServer
@@ -63,6 +63,8 @@ public class MuxDispatcherTests
     {
         private readonly Dictionary<string, IChildServer> _servers = new();
 
+        public event Action<IChildServer>? Evicted;
+
         public Task<IChildServer> GetOrAddAsync(string key)
         {
             if (!_servers.TryGetValue(key, out var server))
@@ -76,6 +78,8 @@ public class MuxDispatcherTests
         public IEnumerable<IChildServer> ActiveServers => _servers.Values;
 
         public Task DisposeAllAsync() => Task.CompletedTask;
+
+        public void TriggerEviction(IChildServer server) => Evicted?.Invoke(server);
     }
 
     // --- helpers ---
@@ -271,7 +275,6 @@ public class MuxDispatcherTests
         var pool = new ServerPool<IChildServer>(10, key =>
             Task.FromResult<IChildServer>(key == sln1 ? serverA : serverB));
         var dispatcher = new MuxDispatcher(router, pool, transport);
-        pool.OnEvict = dispatcher.NotifyEviction;
 
         await pool.GetOrAddAsync(sln1);
         await pool.GetOrAddAsync(sln2);
@@ -290,7 +293,7 @@ public class MuxDispatcherTests
     }
 
     [Fact]
-    public async Task WorkspaceDidChangeWatchedFiles_SlnChange_CallsInvalidateCache()
+    public async Task WorkspaceDidChangeWatchedFiles_SlnChange_CallsNotifyFileChanged()
     {
         var (dispatcher, _, router, _) = Make();
         var msg = new JsonObject
@@ -309,8 +312,8 @@ public class MuxDispatcherTests
         var result = await dispatcher.HandleMessageAsync(msg);
 
         Assert.True(result);
-        Assert.Single(router.InvalidatedPaths);
-        Assert.EndsWith("App.sln", router.InvalidatedPaths[0]);
+        Assert.Single(router.NotifiedPaths);
+        Assert.EndsWith("App.sln", router.NotifiedPaths[0]);
     }
 
     [Fact]
@@ -402,7 +405,7 @@ public class MuxDispatcherTests
         var result = await dispatcher.HandleMessageAsync(msg);
 
         Assert.True(result);
-        Assert.Empty(router.InvalidatedPaths);
+        Assert.Empty(router.NotifiedPaths);
     }
 
     [Fact]
@@ -537,21 +540,17 @@ public class MuxDispatcherTests
         var sln = "/repo/App.slnx";
         var filePath = "/repo/src/Foo.cs";
         var readFileCount = 0;
-        var transport = new FakeTransport();
-        var router = new FakeRouter { RouteResult = sln };
-        var server = new FakeServer();
-        var pool = new ServerPool<IChildServer>(10, _ => Task.FromResult<IChildServer>(server));
-        var dispatcher = new MuxDispatcher(router, pool, transport,
-            _ => { readFileCount++; return Task.FromResult("class Foo {}"); });
-        pool.OnEvict = dispatcher.NotifyEviction;
-        await pool.GetOrAddAsync(sln);
+        var (dispatcher, _, router, pool) = Make(
+            routeResult: sln,
+            readFile: _ => { readFileCount++; return Task.FromResult("class Foo {}"); });
+        var server = (FakeServer)await pool.GetOrAddAsync(sln);
 
         var uri = FileUri(filePath);
         await dispatcher.HandleMessageAsync(Msg("textDocument/didOpen",
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
         server.ForwardedFrames.Clear();
 
-        dispatcher.NotifyEviction(server);
+        pool.TriggerEviction(server);
 
         await dispatcher.HandleMessageAsync(Msg("textDocument/hover", id: JsonValue.Create(4),
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
@@ -566,20 +565,15 @@ public class MuxDispatcherTests
     public async Task NotifyEviction_RemovesEvictedServerEntries()
     {
         var sln = "/repo/App.slnx";
-        var transport = new FakeTransport();
-        var router = new FakeRouter { RouteResult = sln };
-        var server = new FakeServer();
-        var pool = new ServerPool<IChildServer>(10, _ => Task.FromResult<IChildServer>(server));
-        var dispatcher = new MuxDispatcher(router, pool, transport, _ => Task.FromResult(""));
-        pool.OnEvict = dispatcher.NotifyEviction;
+        var (dispatcher, _, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
+        var server = (FakeServer)await pool.GetOrAddAsync(sln);
 
         // Forward a textDocument request to register in requestOwners
         var textDocMsg = Msg("textDocument/hover", id: JsonValue.Create(9),
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri("/repo/src/Foo.cs") } });
         await dispatcher.HandleMessageAsync(textDocMsg);
 
-        // Simulate eviction
-        dispatcher.NotifyEviction(server);
+        pool.TriggerEviction(server);
 
         // Cancel should no longer forward (owner was evicted)
         server.ForwardedFrames.Clear();

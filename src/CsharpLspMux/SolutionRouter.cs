@@ -16,7 +16,7 @@ public sealed class SolutionRouter(string repoRoot) : ISolutionRouter
         return _cache.GetOrAdd(key, Resolve);
     }
 
-    public void InvalidateCache(string changedPath)
+    public void NotifyFileChanged(string changedPath)
     {
         var changedDir = Path.GetDirectoryName(Path.GetFullPath(changedPath)) ?? _repoRoot;
 
