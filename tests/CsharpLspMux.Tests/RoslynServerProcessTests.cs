@@ -34,6 +34,7 @@ public class RoslynServerProcessTests
 
         public Task WriteFrameAsync(byte[] frame) { _channel.Writer.TryWrite(frame); return Task.CompletedTask; }
         public Task SendResponseAsync(JsonNode? id, JsonNode result) => Task.CompletedTask;
+        public Task SendErrorAsync(JsonNode? id, int code, string message) => Task.CompletedTask;
 
         public async Task<JsonObject> ReadNextAsync(CancellationToken ct = default)
         {

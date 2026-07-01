@@ -44,4 +44,20 @@ public sealed class LspTransport : ILspTransport
         var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
         await WriteFrameAsync(body);
     }
+
+    public async Task SendErrorAsync(JsonNode? id, int code, string message)
+    {
+        var response = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id?.DeepClone(),
+            ["error"] = new JsonObject
+            {
+                ["code"] = code,
+                ["message"] = message
+            }
+        };
+        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
+        await WriteFrameAsync(body);
+    }
 }
