@@ -155,6 +155,7 @@ See [CLAUDE.md](./CLAUDE.md) for module map, routing algorithm, and development 
 ## Development
 
 ```bash
+dotnet tool restore   # installs roslyn-language-server (pinned in .config/dotnet-tools.json)
 dotnet build
 dotnet test
 dotnet pack -c Release

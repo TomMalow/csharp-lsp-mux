@@ -54,6 +54,7 @@ Each server initialized with:
 ## Build & test
 
 ```bash
+dotnet tool restore   # installs roslyn-language-server (required for E2E tests)
 dotnet build
 dotnet test
 dotnet pack -c Release
