@@ -91,7 +91,20 @@ public sealed class ServiceARoutingTests : IDisposable
             Assert.NotNull(definitionResponse["result"]);
             Assert.Contains("/src/ServiceA/", definitionResponse["result"]!.ToJsonString());
 
-            // 7. shutdown
+            // 7. textDocument/references at same position
+            var referencesResponse = await client.SendRequestAsync("textDocument/references", new JsonObject
+            {
+                ["textDocument"] = new JsonObject { ["uri"] = fileUri },
+                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 },
+                ["context"] = new JsonObject { ["includeDeclaration"] = true }
+            }, ct);
+
+            Assert.NotNull(referencesResponse);
+            Assert.Null(referencesResponse["error"]);
+            Assert.NotNull(referencesResponse["result"]);
+            Assert.Contains("ServiceA", referencesResponse["result"]!.ToJsonString());
+
+            // 8. shutdown
             var shutdownResponse = await client.SendRequestAsync("shutdown", null, ct);
             Assert.NotNull(shutdownResponse);
             Assert.Null(shutdownResponse["error"]);
