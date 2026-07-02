@@ -25,7 +25,14 @@ internal sealed class MonoRepoFixture : IDisposable
     {
         Directory.CreateDirectory(dest);
         foreach (var file in Directory.GetFiles(source))
-            File.Copy(file, Path.Combine(dest, Path.GetFileName(file)));
+        {
+            var name = Path.GetFileName(file);
+            // Skip MSBuild cache files that embed absolute paths — they break incremental builds
+            // in the temp copy and prevent Roslyn from indexing workspace symbols.
+            if (name.EndsWith(".cache", StringComparison.OrdinalIgnoreCase)) continue;
+            if (name.EndsWith(".FileListAbsolute.txt", StringComparison.OrdinalIgnoreCase)) continue;
+            File.Copy(file, Path.Combine(dest, name));
+        }
         foreach (var dir in Directory.GetDirectories(source))
         {
             var name = Path.GetFileName(dir);
