@@ -7,8 +7,6 @@ namespace CsharpLspMux.Tests;
 
 public class RoslynServerProcessTests
 {
-    // --- fakes ---
-
     /// <summary>
     /// Controllable IFrameReader: enqueue JsonObjects to be returned sequentially.
     /// Blocks until a frame is enqueued or EOF is signalled.
@@ -81,7 +79,22 @@ public class RoslynServerProcessTests
     private static RoslynServerProcess MakeServer(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null)
         => MakeServerWithStdin(reader, transport, onDispose).Server;
 
-    // --- tests ---
+    [Fact]
+    public void ForwardRequest_PreInit_TaskCompletesImmediately()
+    {
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport);
+
+        var frame = MakeFrame(MakeNotification("textDocument/didOpen"));
+        var forwardTask = server.ForwardRequestAsync(frame);
+
+        Assert.True(forwardTask.IsCompleted, "pre-init forward must return immediately (frame queued, not blocking)");
+        Assert.Equal(0, stdin.Length);
+
+        reader.Complete();
+        server.DisposeAsync().AsTask().Wait();
+    }
 
     [Fact]
     public async Task ForwardRequest_PreInit_FlushesAfterInitialized()
@@ -93,13 +106,13 @@ public class RoslynServerProcessTests
         await using var _ = server;
 
         var frame = MakeFrame(MakeNotification("textDocument/didOpen"));
-        var forwardTask = server.ForwardRequestAsync(frame);
+        await server.ForwardRequestAsync(frame);
 
-        await Task.Delay(20, ct);
-        Assert.False(forwardTask.IsCompleted);
+        Assert.Equal(0, stdin.Length);
 
         reader.Enqueue(MakeInitializeResponse());
-        await forwardTask.WaitAsync(ct);
+        // Wait for init flush: read loop must process the initialize response and flush pending
+        await Task.Delay(100, ct);
 
         Assert.True(stdin.Length > 0, "frame must be written to stdin after init");
 
@@ -115,13 +128,9 @@ public class RoslynServerProcessTests
         var stdin = new MemoryStream();
         await using var server = RoslynServerProcess.CreateForTest(stdin, reader, transport);
 
-        // Queue a pending request so we can use its completion as a sync point:
-        // gate opens only after WriteFrameAsync("initialized") has already returned.
-        var frame = MakeFrame(MakeNotification("textDocument/didOpen"));
-        var forwardTask = server.ForwardRequestAsync(frame);
-
         reader.Enqueue(MakeInitializeResponse());
-        await forwardTask.WaitAsync(ct);
+        // Wait for read loop to process initialize response and send "initialized"
+        await Task.Delay(100, ct);
 
         var written = Encoding.UTF8.GetString(stdin.ToArray());
         Assert.Contains("\"method\":\"initialized\"", written);
@@ -217,5 +226,86 @@ public class RoslynServerProcessTests
         Assert.Equal("textDocument/publishDiagnostics", relayed["method"]!.GetValue<string>());
 
         reader.Complete();
+    }
+
+    [Fact]
+    public async Task ForwardRequest_MultiplePreInit_AllFlushedInOrderAfterInit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport);
+        await using var _ = server;
+
+        var frame1 = MakeFrame(MakeNotification("textDocument/didOpen"));
+        var frame2 = MakeFrame(MakeNotification("textDocument/didChange"));
+        await server.ForwardRequestAsync(frame1);
+        await server.ForwardRequestAsync(frame2);
+
+        Assert.Equal(0, stdin.Length);
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(100, ct);
+
+        var written = Encoding.UTF8.GetString(stdin.ToArray());
+        var idx1 = written.IndexOf("textDocument/didOpen", StringComparison.Ordinal);
+        var idx2 = written.IndexOf("textDocument/didChange", StringComparison.Ordinal);
+        Assert.True(idx1 >= 0, "didOpen must be flushed");
+        Assert.True(idx2 >= 0, "didChange must be flushed");
+        Assert.True(idx1 < idx2, "frames must flush in enqueue order");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ForwardRequest_AfterInit_WritesImmediately()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(50, ct);
+        Assert.True(server.IsInitialized, "server must be initialized after response");
+
+        var lengthBeforeForward = stdin.Length;
+        var frame = MakeFrame(MakeNotification("textDocument/hover"));
+        await server.ForwardRequestAsync(frame);
+
+        Assert.True(stdin.Length > lengthBeforeForward, "post-init forward must write immediately");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ForwardRequest_ConcurrentSignalAndEnqueue_NoFrameLost()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const int frameCount = 50;
+
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var reader = new FakeFrameReader();
+            var transport = new FakeTransport();
+            var (server, stdin) = MakeServerWithStdin(reader, transport);
+            await using var _ = server;
+
+            // Fire init response concurrently while flooding ForwardRequestAsync
+            var forwardTasks = Enumerable.Range(0, frameCount)
+                .Select(i => server.ForwardRequestAsync(MakeFrame(MakeNotification($"textDocument/didOpen_{i}"))))
+                .ToArray();
+
+            reader.Enqueue(MakeInitializeResponse());
+            await Task.WhenAll(forwardTasks);
+            await Task.Delay(100, ct);
+
+            var written = Encoding.UTF8.GetString(stdin.ToArray());
+            for (var i = 0; i < frameCount; i++)
+                Assert.Contains($"didOpen_{i}", written, StringComparison.Ordinal);
+
+            reader.Complete();
+        }
     }
 }
