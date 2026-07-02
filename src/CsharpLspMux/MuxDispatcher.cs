@@ -10,6 +10,7 @@ public sealed class MuxDispatcher
     private readonly IServerPool<IChildServer> _pool;
     private readonly ILspTransport _transport;
     private readonly Func<string, Task<string>> _readFile;
+    private readonly MuxLogger? _logger;
     private readonly Dictionary<string, IChildServer> _requestOwners = new();
     private readonly Dictionary<IChildServer, HashSet<string>> _openedUris = new();
     private bool _poolDrained;
@@ -18,12 +19,14 @@ public sealed class MuxDispatcher
         ISolutionRouter router,
         IServerPool<IChildServer> pool,
         ILspTransport transport,
-        Func<string, Task<string>>? readFile = null)
+        Func<string, Task<string>>? readFile = null,
+        MuxLogger? logger = null)
     {
         _router = router;
         _pool = pool;
         _transport = transport;
         _readFile = readFile ?? (path => File.ReadAllTextAsync(path));
+        _logger = logger;
         pool.Evicted += NotifyEviction;
     }
 
@@ -97,6 +100,12 @@ public sealed class MuxDispatcher
             {
                 var server = await _pool.GetOrAddAsync(solutionPath);
 
+                if (_logger?.IsEnabled == true)
+                {
+                    var state = server.IsInitialized ? "initialized" : "starting, queued";
+                    _logger.Log($"[mux] route {method} → {solutionPath} (server: {state})");
+                }
+
                 if (method == "textDocument/didClose")
                     MarkClosed(server, uri);
                 else if (method == "textDocument/didOpen")
@@ -111,6 +120,7 @@ public sealed class MuxDispatcher
             }
             else
             {
+                _logger?.Log($"[mux] SolutionRouter: no solution found for {filePath}");
                 if (message["id"] is JsonNode requestId)
                     await _transport.SendErrorAsync(requestId, -32001, $"No solution found for file: {filePath}");
             }

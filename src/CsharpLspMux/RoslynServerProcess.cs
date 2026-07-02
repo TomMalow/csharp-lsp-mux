@@ -16,6 +16,8 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly IFrameReader _reader;
     private readonly ILspTransport _clientTransport;
     private readonly Func<Task>? _onDispose;
+    private readonly MuxLogger? _logger;
+    private readonly string? _solutionPath;
 
     private readonly object _initLock = new();
     private bool _initialized;
@@ -24,6 +26,7 @@ public sealed class RoslynServerProcess : IChildServer
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _readerTask;
+    private readonly long _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
 
     private readonly ConcurrentDictionary<string, TaskCompletionSource<byte[]>> _pending = new();
     private int _syntheticIdCounter;
@@ -31,12 +34,14 @@ public sealed class RoslynServerProcess : IChildServer
 
     public bool IsInitialized { get { lock (_initLock) return _initialized; } }
 
-    private RoslynServerProcess(Stream stdin, IFrameReader reader, ILspTransport clientTransport, Func<Task>? onDispose)
+    private RoslynServerProcess(Stream stdin, IFrameReader reader, ILspTransport clientTransport, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null)
     {
         _stdin = stdin;
         _reader = reader;
         _clientTransport = clientTransport;
         _onDispose = onDispose;
+        _logger = logger;
+        _solutionPath = solutionPath;
         _readerTask = Task.Run(ReadLoopAsync);
     }
 
@@ -44,10 +49,12 @@ public sealed class RoslynServerProcess : IChildServer
         Stream stdin,
         IFrameReader reader,
         ILspTransport clientTransport,
-        Func<Task>? onDispose = null)
-        => new(stdin, reader, clientTransport, onDispose);
+        Func<Task>? onDispose = null,
+        MuxLogger? logger = null,
+        string? solutionPath = null)
+        => new(stdin, reader, clientTransport, onDispose, logger, solutionPath);
 
-    public static RoslynServerProcess Start(string solutionPath, ILspTransport clientTransport)
+    public static RoslynServerProcess Start(string solutionPath, ILspTransport clientTransport, MuxLogger? logger = null)
     {
         var solutionDir = Path.GetDirectoryName(solutionPath)!;
 
@@ -74,7 +81,10 @@ public sealed class RoslynServerProcess : IChildServer
                         process.Kill();
                 }
                 process.Dispose();
-            });
+            },
+            logger: logger,
+            solutionPath: solutionPath);
+        _ = server.ReadStderrAsync(process.StandardError); // fire-and-forget: cancelled via _cts in DisposeAsync
         server.SendInitialize(solutionPath, solutionDir);
         return server;
     }
@@ -136,6 +146,11 @@ public sealed class RoslynServerProcess : IChildServer
                         pending = _pendingQueue.ToArray();
                         _pendingQueue.Clear();
                     }
+                    if (_logger?.IsEnabled == true)
+                    {
+                        var elapsed = (long)(System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds);
+                        _logger.Log($"[mux] server {_solutionPath} initialized in {elapsed}ms");
+                    }
                     foreach (var f in pending)
                         await WriteFrameAsync(f);
                     continue;
@@ -178,6 +193,24 @@ public sealed class RoslynServerProcess : IChildServer
         finally
         {
             _writeLock.Release();
+        }
+    }
+
+    internal async Task ReadStderrAsync(System.IO.TextReader stderr)
+    {
+        try
+        {
+            string? line;
+            while (!_cts.Token.IsCancellationRequested
+                   && (line = await stderr.ReadLineAsync(_cts.Token)) is not null)
+            {
+                _logger?.Log($"[mux] server {_solutionPath} stderr: {line}");
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _logger?.Log($"[mux] server {_solutionPath} stderr reader error: {ex.Message}");
         }
     }
 

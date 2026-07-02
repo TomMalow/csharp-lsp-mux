@@ -14,6 +14,7 @@ public sealed class ServerPoolTests
         public int ShutdownCount;
         public int ShutdownBeforeDisposeCount;
         public byte[]? LastSentFrame;
+        public bool IsInitialized => true;
 
         public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
 

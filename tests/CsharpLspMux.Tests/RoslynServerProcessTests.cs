@@ -70,10 +70,10 @@ public class RoslynServerProcessTests
         ["result"] = new JsonObject { ["capabilities"] = new JsonObject() }
     };
 
-    private static (RoslynServerProcess Server, MemoryStream Stdin) MakeServerWithStdin(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null)
+    private static (RoslynServerProcess Server, MemoryStream Stdin) MakeServerWithStdin(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null, MuxLogger? logger = null, string? solutionPath = null)
     {
         var stdin = new MemoryStream();
-        return (RoslynServerProcess.CreateForTest(stdin, reader, transport, onDispose), stdin);
+        return (RoslynServerProcess.CreateForTest(stdin, reader, transport, onDispose, logger, solutionPath), stdin);
     }
 
     private static RoslynServerProcess MakeServer(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null)
@@ -307,5 +307,27 @@ public class RoslynServerProcessTests
 
             reader.Complete();
         }
+    }
+
+    [Fact]
+    public async Task InitializeResponse_LogsInitializedWithElapsedTime()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(enabled: true, logWriter);
+
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, solutionPath: "/repo/App.slnx");
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(100, ct);
+
+        var output = logWriter.ToString();
+        Assert.Contains("[mux] server /repo/App.slnx initialized in", output);
+        Assert.Contains("ms", output);
+
+        reader.Complete();
     }
 }
