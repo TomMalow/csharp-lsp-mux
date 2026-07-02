@@ -25,8 +25,13 @@ In a mono-repo with many `.sln` files, a single language server binds to whichev
 ## Installation
 
 ```bash
-# Build and install as a global tool
-dotnet tool install --global --add-source ./src/CsharpLspMux
+# Pack then install as a global tool
+dotnet pack src/CsharpLspMux -c Release
+dotnet tool install --global --add-source ./src/CsharpLspMux/bin/Release CsharpLspMux
+
+# To reinstall after rebuilding (same version):
+dotnet tool uninstall --global CsharpLspMux
+dotnet tool install --global --add-source ./src/CsharpLspMux/bin/Release CsharpLspMux
 
 # Verify
 csharp-lsp-mux --version
