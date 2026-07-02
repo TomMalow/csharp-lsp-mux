@@ -46,8 +46,9 @@ internal sealed class LspClient : IDisposable
         {
             var frame = await _reader.ReadFrameAsync(ct);
             if (frame is null) return null;
-            // Skip notifications (no id) and responses for other ids
+            // Skip notifications (no id) and server-initiated requests (id + method)
             if (frame["id"] is null) continue;
+            if (frame["method"] is not null) continue;
             // JSON round-trip deserialises numbers as long; compare via ToJsonString to avoid type mismatch
             if (frame["id"]?.ToJsonString() == expectedId.ToString()) return frame;
         }
