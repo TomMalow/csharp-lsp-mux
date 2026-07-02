@@ -17,7 +17,9 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly ILspTransport _clientTransport;
     private readonly Func<Task>? _onDispose;
 
-    private readonly InitBarrier _gate = new();
+    private readonly object _initLock = new();
+    private bool _initialized;
+    private readonly List<byte[]> _pendingQueue = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
     private readonly CancellationTokenSource _cts = new();
@@ -27,7 +29,7 @@ public sealed class RoslynServerProcess : IChildServer
     private int _syntheticIdCounter;
     private int _disposed;
 
-    public bool IsInitialized => _gate.IsInitialized;
+    public bool IsInitialized { get { lock (_initLock) return _initialized; } }
 
     private RoslynServerProcess(Stream stdin, IFrameReader reader, ILspTransport clientTransport, Func<Task>? onDispose)
     {
@@ -99,16 +101,17 @@ public sealed class RoslynServerProcess : IChildServer
         _ = WriteFrameAsync(SerializeFrame(initRequest));
     }
 
-    public async Task ForwardRequestAsync(byte[] frame)
+    public Task ForwardRequestAsync(byte[] frame)
     {
-        if (!IsInitialized)
+        lock (_initLock)
         {
-            _gate.Enqueue(frame);
-            await _gate.WaitInitializedAsync();
-            return;
+            if (!_initialized)
+            {
+                _pendingQueue.Add(frame);
+                return Task.CompletedTask;
+            }
         }
-
-        await WriteFrameAsync(frame);
+        return WriteFrameAsync(frame);
     }
 
     private async Task ReadLoopAsync()
@@ -126,8 +129,15 @@ public sealed class RoslynServerProcess : IChildServer
                 {
                     var initialized = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "initialized", ["params"] = new JsonObject() };
                     await WriteFrameAsync(SerializeFrame(initialized));
-                    _gate.SignalInitialized();
-                    await FlushPendingAsync();
+                    byte[][] pending;
+                    lock (_initLock)
+                    {
+                        _initialized = true;
+                        pending = _pendingQueue.ToArray();
+                        _pendingQueue.Clear();
+                    }
+                    foreach (var f in pending)
+                        await WriteFrameAsync(f);
                     continue;
                 }
 
@@ -153,12 +163,6 @@ public sealed class RoslynServerProcess : IChildServer
         {
             Console.Error.WriteLine($"[RoslynServerProcess] reader error: {ex.Message}");
         }
-    }
-
-    private async Task FlushPendingAsync()
-    {
-        foreach (var frame in _gate.DrainPending())
-            await WriteFrameAsync(frame);
     }
 
     private async Task WriteFrameAsync(byte[] frame)
@@ -235,6 +239,8 @@ public sealed class RoslynServerProcess : IChildServer
         await _cts.CancelAsync();
 
         try { await _readerTask; } catch { }
+
+        lock (_initLock) { _pendingQueue.Clear(); }
 
         if (_onDispose is not null)
             await _onDispose();
