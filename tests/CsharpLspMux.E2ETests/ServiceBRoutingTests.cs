@@ -1,0 +1,214 @@
+using System.Diagnostics;
+using System.Text.Json.Nodes;
+using Xunit;
+
+namespace CsharpLspMux.E2ETests;
+
+public sealed class ServiceBRoutingTests : IDisposable
+{
+    private readonly MonoRepoFixture _fixture;
+
+    public ServiceBRoutingTests()
+    {
+        _fixture = new MonoRepoFixture();
+    }
+
+    [Fact]
+    [Trait("Category", "E2E")]
+    public async Task ServiceB_HoverAndDefinition_ReturnsServiceBSymbols()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        var ct = cts.Token;
+
+        var psi = new ProcessStartInfo("dotnet", MuxPaths.MuxDll)
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            Environment = { ["REPO_ROOT"] = _fixture.TempDir }
+        };
+
+        using var process = Process.Start(psi)!;
+        try
+        {
+            using var client = new LspClient(process.StandardInput.BaseStream, process.StandardOutput.BaseStream);
+
+            var initResponse = await client.SendRequestAsync("initialize", new JsonObject
+            {
+                ["processId"] = Environment.ProcessId,
+                ["rootUri"] = new Uri(_fixture.TempDir).AbsoluteUri,
+                ["capabilities"] = new JsonObject()
+            }, ct);
+
+            Assert.NotNull(initResponse);
+            Assert.Null(initResponse["error"]);
+
+            await client.SendNotificationAsync("initialized", new JsonObject(), ct);
+            await client.SendNotificationAsync("workspace/didChangeConfiguration", new JsonObject
+            {
+                ["settings"] = new JsonObject()
+            }, ct);
+
+            var fileUri = new Uri(Path.Combine(_fixture.TempDir, "src", "ServiceB", "ServiceB.Worker", "Class1.cs")).AbsoluteUri;
+            await client.SendNotificationAsync("textDocument/didOpen", new JsonObject
+            {
+                ["textDocument"] = new JsonObject
+                {
+                    ["uri"] = fileUri,
+                    ["languageId"] = "csharp",
+                    ["version"] = 1,
+                    ["text"] = "namespace ServiceB.Worker;\n\npublic class ServiceBWorker\n{\n}\n"
+                }
+            }, ct);
+
+            var hoverResponse = await client.SendRequestAsync("textDocument/hover", new JsonObject
+            {
+                ["textDocument"] = new JsonObject { ["uri"] = fileUri },
+                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 }
+            }, ct);
+
+            Assert.NotNull(hoverResponse);
+            Assert.Null(hoverResponse["error"]);
+            Assert.NotNull(hoverResponse["result"]);
+            Assert.Contains("ServiceBWorker", hoverResponse["result"]!.ToJsonString());
+
+            var definitionResponse = await client.SendRequestAsync("textDocument/definition", new JsonObject
+            {
+                ["textDocument"] = new JsonObject { ["uri"] = fileUri },
+                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 }
+            }, ct);
+
+            Assert.NotNull(definitionResponse);
+            Assert.Null(definitionResponse["error"]);
+            Assert.NotNull(definitionResponse["result"]);
+            Assert.Contains("/src/ServiceB/", definitionResponse["result"]!.ToJsonString());
+
+            var shutdownResponse = await client.SendRequestAsync("shutdown", null, ct);
+            Assert.NotNull(shutdownResponse);
+            Assert.Null(shutdownResponse["error"]);
+
+            await client.SendNotificationAsync("exit", null, ct);
+
+            await process.WaitForExitAsync(ct);
+            Assert.Equal(0, process.ExitCode);
+        }
+        catch
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw;
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "E2E")]
+    public async Task WorkspaceSymbol_BothServersActive_ReturnsBothSymbols()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        var ct = cts.Token;
+
+        var psi = new ProcessStartInfo("dotnet", MuxPaths.MuxDll)
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            Environment = { ["REPO_ROOT"] = _fixture.TempDir }
+        };
+
+        using var process = Process.Start(psi)!;
+        try
+        {
+            using var client = new LspClient(process.StandardInput.BaseStream, process.StandardOutput.BaseStream);
+
+            var initResponse = await client.SendRequestAsync("initialize", new JsonObject
+            {
+                ["processId"] = Environment.ProcessId,
+                ["rootUri"] = new Uri(_fixture.TempDir).AbsoluteUri,
+                ["capabilities"] = new JsonObject()
+            }, ct);
+
+            Assert.NotNull(initResponse);
+            Assert.Null(initResponse["error"]);
+
+            await client.SendNotificationAsync("initialized", new JsonObject(), ct);
+            await client.SendNotificationAsync("workspace/didChangeConfiguration", new JsonObject
+            {
+                ["settings"] = new JsonObject()
+            }, ct);
+
+            // Open ServiceA — triggers ServiceA Roslyn server
+            var serviceAUri = new Uri(Path.Combine(_fixture.TempDir, "src", "ServiceA", "ServiceA.Api", "Class1.cs")).AbsoluteUri;
+            await client.SendNotificationAsync("textDocument/didOpen", new JsonObject
+            {
+                ["textDocument"] = new JsonObject
+                {
+                    ["uri"] = serviceAUri,
+                    ["languageId"] = "csharp",
+                    ["version"] = 1,
+                    ["text"] = "namespace ServiceA.Api;\n\npublic class ServiceAClient\n{\n}\n"
+                }
+            }, ct);
+
+            // Open ServiceB — triggers ServiceB Roslyn server
+            var serviceBUri = new Uri(Path.Combine(_fixture.TempDir, "src", "ServiceB", "ServiceB.Worker", "Class1.cs")).AbsoluteUri;
+            await client.SendNotificationAsync("textDocument/didOpen", new JsonObject
+            {
+                ["textDocument"] = new JsonObject
+                {
+                    ["uri"] = serviceBUri,
+                    ["languageId"] = "csharp",
+                    ["version"] = 1,
+                    ["text"] = "namespace ServiceB.Worker;\n\npublic class ServiceBWorker\n{\n}\n"
+                }
+            }, ct);
+
+            // Ensures InitBarrier has fired on both Roslyn servers before workspace/symbol broadcast
+            var hoverA = await client.SendRequestAsync("textDocument/hover", new JsonObject
+            {
+                ["textDocument"] = new JsonObject { ["uri"] = serviceAUri },
+                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 }
+            }, ct);
+            Assert.NotNull(hoverA);
+            Assert.Null(hoverA["error"]);
+
+            var hoverB = await client.SendRequestAsync("textDocument/hover", new JsonObject
+            {
+                ["textDocument"] = new JsonObject { ["uri"] = serviceBUri },
+                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 }
+            }, ct);
+            Assert.NotNull(hoverB);
+            Assert.Null(hoverB["error"]);
+
+            // workspace/symbol broadcast — both servers must respond and results merged
+            var symbolResponse = await client.SendRequestAsync("workspace/symbol", new JsonObject
+            {
+                ["query"] = ""
+            }, ct);
+
+            Assert.NotNull(symbolResponse);
+            Assert.Null(symbolResponse["error"]);
+            Assert.NotNull(symbolResponse["result"]);
+
+            var resultJson = symbolResponse["result"]!.ToJsonString();
+            Assert.Contains("ServiceAClient", resultJson);
+            Assert.Contains("ServiceBWorker", resultJson);
+
+            var shutdownResponse = await client.SendRequestAsync("shutdown", null, ct);
+            Assert.NotNull(shutdownResponse);
+            Assert.Null(shutdownResponse["error"]);
+
+            await client.SendNotificationAsync("exit", null, ct);
+
+            await process.WaitForExitAsync(ct);
+            Assert.Equal(0, process.ExitCode);
+        }
+        catch
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw;
+        }
+    }
+
+    public void Dispose() => _fixture.Dispose();
+}
