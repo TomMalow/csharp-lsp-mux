@@ -26,9 +26,7 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly List<byte[]> _pendingRequests = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
-    private readonly int _graceTimeoutMs;
     private readonly int _hardTimeoutMs;
-    private CancellationTokenSource? _graceTimerCts;
     private readonly HashSet<string> _loadingTokens = new();
     private bool _seenLoadingToken;
 
@@ -42,14 +40,13 @@ public sealed class RoslynServerProcess : IChildServer
 
     public ServerReadiness Readiness { get { lock (_initLock) return _readiness; } }
 
-    private RoslynServerProcess(Stream stdin, IFrameReader reader, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null, int graceTimeoutMs = 2000, int hardTimeoutMs = -1)
+    private RoslynServerProcess(Stream stdin, IFrameReader reader, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null, int hardTimeoutMs = -1)
     {
         _stdin = stdin;
         _reader = reader;
         _onDispose = onDispose;
         _logger = logger;
         _solutionPath = solutionPath;
-        _graceTimeoutMs = graceTimeoutMs;
         _hardTimeoutMs = hardTimeoutMs > 0 ? hardTimeoutMs : ReadHardTimeoutMs();
         _readerTask = Task.Run(ReadLoopAsync);
     }
@@ -58,7 +55,7 @@ public sealed class RoslynServerProcess : IChildServer
     {
         if (int.TryParse(Environment.GetEnvironmentVariable("LSP_MUX_LOAD_TIMEOUT_MS"), out var ms) && ms > 0)
             return ms;
-        return 10000;
+        return 30000;
     }
 
     internal static RoslynServerProcess CreateForTest(
@@ -68,10 +65,9 @@ public sealed class RoslynServerProcess : IChildServer
         MuxLogger? logger = null,
         string? solutionPath = null,
         string? solutionDir = null,
-        int graceTimeoutMs = 2000,
-        int hardTimeoutMs = 10000)
+        int hardTimeoutMs = 30000)
     {
-        var server = new RoslynServerProcess(stdin, reader, onDispose, logger, solutionPath, graceTimeoutMs, hardTimeoutMs);
+        var server = new RoslynServerProcess(stdin, reader, onDispose, logger, solutionPath, hardTimeoutMs);
         if (solutionPath != null && solutionDir != null)
             server.SendInitialize(solutionPath, solutionDir);
         return server;
@@ -228,21 +224,7 @@ public sealed class RoslynServerProcess : IChildServer
                     foreach (var f in pendingNotifications)
                         await WriteFrameAsync(f);
 
-                    // Grace timer: if no progress tokens arrive within grace period, assume workspace is ready.
-                    var graceCts = new CancellationTokenSource();
-                    _graceTimerCts = graceCts;
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await Task.Delay(_graceTimeoutMs, graceCts.Token);
-                            _logger?.Debug("workspace ready via grace timeout");
-                            await TransitionToReady();
-                        }
-                        catch (OperationCanceledException) { }
-                    });
-
-                    // Hard timeout: unconditional safety net, logs a warning only if still loading.
+                    // Hard timeout: unconditional safety net for servers that never emit progress tokens.
                     _ = Task.Run(async () =>
                     {
                         try
@@ -256,7 +238,7 @@ public sealed class RoslynServerProcess : IChildServer
                                 count = _pendingRequests.Count;
                             }
                             if (stillLoading)
-                                _logger?.Info($"workspace load timeout, forwarding {count} queued requests");
+                                _logger?.Info($"workspace load timeout ({_hardTimeoutMs}ms), forwarding {count} queued requests");
                             _logger?.Debug("workspace ready via hard timeout");
                             await TransitionToReady();
                         }
@@ -305,7 +287,6 @@ public sealed class RoslynServerProcess : IChildServer
                             {
                                 _loadingTokens.Add(tokenKey);
                                 _seenLoadingToken = true;
-                                await CancelGraceTimerAsync();
                             }
                         }
                         else if (kind == "end")
@@ -458,18 +439,9 @@ public sealed class RoslynServerProcess : IChildServer
         await WriteFrameAsync(SerializeFrame(exit));
     }
 
-    private async Task CancelGraceTimerAsync()
-    {
-        var graceCts = _graceTimerCts;
-        if (graceCts is not null)
-            await graceCts.CancelAsync();
-    }
-
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-
-        await CancelGraceTimerAsync();
 
         await _cts.CancelAsync();
 
@@ -485,7 +457,6 @@ public sealed class RoslynServerProcess : IChildServer
             await _onDispose();
 
         _cts.Dispose();
-        _graceTimerCts?.Dispose();
         _writeLock.Dispose();
     }
 

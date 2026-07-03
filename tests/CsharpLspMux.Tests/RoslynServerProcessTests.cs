@@ -87,10 +87,10 @@ public class RoslynServerProcessTests
         FakeFrameReader reader, FakeTransport transport,
         Func<Task>? onDispose = null, MuxLogger? logger = null,
         string? solutionPath = null, string? solutionDir = null,
-        int graceTimeoutMs = 20, int hardTimeoutMs = 200)
+        int hardTimeoutMs = 50)
     {
         var stdin = new MemoryStream();
-        var server = RoslynServerProcess.CreateForTest(stdin, reader, onDispose, logger, solutionPath, solutionDir, graceTimeoutMs, hardTimeoutMs);
+        var server = RoslynServerProcess.CreateForTest(stdin, reader, onDispose, logger, solutionPath, solutionDir, hardTimeoutMs);
         server.OnRelayFrame += frame => new ValueTask(transport.WriteFrameAsync(frame));
         return (server, stdin);
     }
@@ -305,7 +305,7 @@ public class RoslynServerProcessTests
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        var (server, stdin) = MakeServerWithStdin(reader, transport);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 50);
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -444,7 +444,7 @@ public class RoslynServerProcessTests
     {
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
-        await using var server = RoslynServerProcess.CreateForTest(new MemoryStream(), reader, graceTimeoutMs: 20);
+        await using var server = RoslynServerProcess.CreateForTest(new MemoryStream(), reader, hardTimeoutMs: 50);
 
         reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(100, ct);
@@ -499,7 +499,7 @@ public class RoslynServerProcessTests
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        var (server, stdin) = MakeServerWithStdin(reader, transport);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 50);
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -516,29 +516,28 @@ public class RoslynServerProcessTests
     }
 
     [Fact]
-    public async Task ForwardRequest_DuringInitialized_QueuesUntilGraceTimerFires()
+    public async Task ForwardRequest_DuringInitialized_QueuesUntilHardTimeoutFires()
     {
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        // grace=100ms so we can observe Initialized state before it fires
-        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 100, hardTimeoutMs: 2000);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 100);
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
-        await Task.Delay(30, ct); // past init processing, before grace fires
+        await Task.Delay(30, ct); // past init processing, before hard timeout
 
         Assert.Equal(ServerReadiness.Initialized, server.Readiness);
 
         var lengthAfterInit = stdin.Length;
         var frame = MakeFrame(MakeRequest("textDocument/references", 1));
         await server.ForwardRequestAsync(frame);
-        Assert.Equal(lengthAfterInit, stdin.Length); // still queued — grace not fired
+        Assert.Equal(lengthAfterInit, stdin.Length); // still queued
 
-        await Task.Delay(150, ct); // past grace timer (100ms)
+        await Task.Delay(150, ct); // past hard timeout (100ms)
 
         Assert.Equal(ServerReadiness.Ready, server.Readiness);
-        Assert.True(stdin.Length > lengthAfterInit, "request must be flushed after grace timer fires");
+        Assert.True(stdin.Length > lengthAfterInit, "request must be flushed after hard timeout fires");
 
         reader.Complete();
     }
@@ -549,8 +548,7 @@ public class RoslynServerProcessTests
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        // long grace so server stays in Initialized throughout the test
-        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 5000, hardTimeoutMs: 10000);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 10000);
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -576,8 +574,7 @@ public class RoslynServerProcessTests
         var logWriter = new StringWriter();
         var logger = new MuxLogger(LogLevel.Debug, logWriter);
 
-        // grace=5000ms (won't fire), hard=60ms (fires first)
-        var (server, stdin) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 5000, hardTimeoutMs: 60);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, logger: logger, hardTimeoutMs: 60);
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -601,17 +598,23 @@ public class RoslynServerProcessTests
     }
 
     [Fact]
-    public async Task TransitionToReady_CalledFromBothTimers_IdempotentNoException()
+    public async Task TransitionToReady_CalledTwice_IdempotentNoException()
     {
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        // both timers short — they race to call TransitionToReady
-        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 20, hardTimeoutMs: 25);
+        // Progress end + hard timeout can both call TransitionToReady
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 60);
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
-        await Task.Delay(200, ct); // well past both timers
+        await Task.Delay(30, ct);
+
+        // Trigger via progress
+        reader.Enqueue(MakeProgressBegin("t1", "Loading workspace"));
+        await Task.Delay(20, ct);
+        reader.Enqueue(MakeProgressEnd("t1"));
+        await Task.Delay(100, ct); // also past hard timeout
 
         // No exception, readiness is Ready exactly once
         Assert.Equal(ServerReadiness.Ready, server.Readiness);
@@ -628,7 +631,7 @@ public class RoslynServerProcessTests
         var logWriter = new StringWriter();
         var logger = new MuxLogger(LogLevel.Debug, logWriter);
 
-        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, solutionPath: "/repo/App.slnx", graceTimeoutMs: 20, hardTimeoutMs: 200);
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, solutionPath: "/repo/App.slnx", hardTimeoutMs: 60);
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -679,7 +682,7 @@ public class RoslynServerProcessTests
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 5000, hardTimeoutMs: 10000);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 10000);
         await using var s = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -708,7 +711,7 @@ public class RoslynServerProcessTests
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 5000, hardTimeoutMs: 10000);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 10000);
         await using var s = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -719,7 +722,7 @@ public class RoslynServerProcessTests
         reader.Enqueue(MakeProgressBegin("token1", "Loading workspace..."));
         await Task.Delay(30, ct);
 
-        // Request queued while still Initialized (grace cancelled, progress active)
+        // Request queued while still Initialized, progress active
         var frame = MakeFrame(MakeRequest("textDocument/references", 1));
         await server.ForwardRequestAsync(frame);
         var stdinBeforeEnd = stdin.Length;
@@ -739,7 +742,7 @@ public class RoslynServerProcessTests
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 5000, hardTimeoutMs: 10000);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 10000);
         await using var s = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -771,51 +774,45 @@ public class RoslynServerProcessTests
     }
 
     [Fact]
-    public async Task Progress_NonLoadingTitle_GraceTimerStillFires()
+    public async Task Progress_NonLoadingTitle_DoesNotBlockHardTimeout()
     {
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        // Short grace so it fires; progress has non-loading title so grace must NOT be cancelled
-        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 60, hardTimeoutMs: 5000);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 80);
         await using var s = server;
 
         reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(20, ct);
         Assert.Equal(ServerReadiness.Initialized, server.Readiness);
 
+        // Non-loading progress does not set _seenLoadingToken, so hard timeout still fires
         reader.Enqueue(MakeProgressBegin("tokenX", "Analyzing code"));
-        await Task.Delay(30, ct);
-        // Still Initialized right after non-loading begin (grace not yet fired)
+        await Task.Delay(150, ct); // past hard timeout (80ms)
 
-        await Task.Delay(100, ct); // past grace (60ms)
         Assert.Equal(ServerReadiness.Ready, server.Readiness);
 
         reader.Complete();
     }
 
     [Fact]
-    public async Task Progress_GraceCancelledWhenLoadingBegins()
+    public async Task Progress_LoadingBegin_PreventsHardTimeoutFromTransitioning()
     {
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        // grace=80ms — would fire if not cancelled; hard=5000ms (won't fire in test)
-        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 80, hardTimeoutMs: 5000);
+        // hard=5000ms (won't fire in test) — loading progress holds gate open
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 5000);
         await using var s = server;
 
         reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(20, ct);
         Assert.Equal(ServerReadiness.Initialized, server.Readiness);
 
-        // Send loading begin — grace must be cancelled
         reader.Enqueue(MakeProgressBegin("tokenL", "Loading workspace"));
-        await Task.Delay(20, ct);
+        await Task.Delay(50, ct);
 
-        // Wait past grace period — if grace were not cancelled it would have fired
-        await Task.Delay(120, ct);
-
-        // Grace was cancelled, hard not fired; no end sent → still Initialized
+        // No end sent → still Initialized (progress holds the gate)
         Assert.Equal(ServerReadiness.Initialized, server.Readiness);
 
         reader.Complete();
@@ -830,14 +827,13 @@ public class RoslynServerProcessTests
         var logWriter = new StringWriter();
         var logger = new MuxLogger(LogLevel.Debug, logWriter);
 
-        // grace=5000ms (won't fire); hard=80ms (fires as fallback when progress never ends)
-        var (server, stdin) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 5000, hardTimeoutMs: 80);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, logger: logger, hardTimeoutMs: 80);
         await using var s = server;
 
         reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(30, ct);
 
-        // Loading begins — grace is cancelled, hard timeout becomes the only fallback
+        // Loading begins — hard timeout becomes the only fallback
         reader.Enqueue(MakeWorkDoneProgressCreate(10, "token1"));
         reader.Enqueue(MakeProgressBegin("token1", "Loading workspace..."));
         await Task.Delay(20, ct);
@@ -922,7 +918,7 @@ public class RoslynServerProcessTests
         var logWriter = new StringWriter();
         var logger = new MuxLogger(LogLevel.Debug, logWriter);
 
-        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 100, hardTimeoutMs: 5000);
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, hardTimeoutMs: 80);
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -932,30 +928,10 @@ public class RoslynServerProcessTests
         await server.ForwardRequestAsync(MakeFrame(MakeRequest("textDocument/references", 1)));
         await server.ForwardRequestAsync(MakeFrame(MakeRequest("textDocument/hover", 2)));
 
-        await Task.Delay(200, ct); // past grace (100ms)
+        await Task.Delay(200, ct); // past hard timeout (80ms)
         Assert.Equal(ServerReadiness.Ready, server.Readiness);
 
         Assert.Contains("draining 2 queued requests", logWriter.ToString());
-
-        reader.Complete();
-    }
-
-    [Fact]
-    public async Task GraceTimer_DebugLogsGraceTimeout()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var reader = new FakeFrameReader();
-        var transport = new FakeTransport();
-        var logWriter = new StringWriter();
-        var logger = new MuxLogger(LogLevel.Debug, logWriter);
-
-        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 50, hardTimeoutMs: 5000);
-        await using var _ = server;
-
-        reader.Enqueue(MakeInitializeResponse());
-        await Task.Delay(200, ct);
-
-        Assert.Contains("workspace ready via grace timeout", logWriter.ToString());
 
         reader.Complete();
     }
@@ -969,8 +945,7 @@ public class RoslynServerProcessTests
         var logWriter = new StringWriter();
         var logger = new MuxLogger(LogLevel.Debug, logWriter);
 
-        // grace=5000ms (won't fire), hard=60ms
-        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 5000, hardTimeoutMs: 60);
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, hardTimeoutMs: 60);
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -990,7 +965,7 @@ public class RoslynServerProcessTests
         var logWriter = new StringWriter();
         var logger = new MuxLogger(LogLevel.Debug, logWriter);
 
-        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 20, hardTimeoutMs: 200);
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, hardTimeoutMs: 60);
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
@@ -1014,7 +989,7 @@ public class RoslynServerProcessTests
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
-        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 5000, hardTimeoutMs: 10000);
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 10000);
         await using var s = server;
 
         reader.Enqueue(MakeInitializeResponse());
