@@ -1005,4 +1005,149 @@ public class RoslynServerProcessTests
 
         reader.Complete();
     }
+
+    [Fact]
+    public async Task ProjectInitializationComplete_TransitionsToReadyAndDrainsRequests()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 10000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        var frame = MakeFrame(MakeRequest("textDocument/references", 1));
+        await server.ForwardRequestAsync(frame);
+        var stdinBefore = stdin.Length;
+
+        reader.Enqueue(MakeNotification("workspace/projectInitializationComplete"));
+        await Task.Delay(50, ct);
+
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+        var written = Encoding.UTF8.GetString(stdin.ToArray());
+        Assert.Contains("textDocument/references", written, StringComparison.Ordinal);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task HardTimeout_WithoutInitializationComplete_StillTransitionsToReady()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 80);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        // workspace/projectInitializationComplete is never sent — hard timeout must still fire
+        await Task.Delay(200, ct);
+
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task HardTimeout_LogMessage_ContainsFiredAsFallback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Info, logWriter);
+
+        var (server, stdin) = MakeServerWithStdin(reader, transport, logger: logger, hardTimeoutMs: 60);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+
+        var frame = MakeFrame(MakeRequest("textDocument/references", 1));
+        await server.ForwardRequestAsync(frame);
+
+        await Task.Delay(200, ct); // past hard timeout (60ms)
+
+        Assert.Contains("fired as fallback", logWriter.ToString());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ProjectInitializationComplete_InfoLogEmitted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Info, logWriter);
+
+        var (server, stdin) = MakeServerWithStdin(reader, transport, logger: logger,
+            solutionPath: "/repo/App.slnx", hardTimeoutMs: 10000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+
+        reader.Enqueue(MakeNotification("workspace/projectInitializationComplete"));
+        await Task.Delay(50, ct);
+
+        Assert.Contains("workspace/projectInitializationComplete", logWriter.ToString());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ProjectInitializationComplete_AfterProgressEnd_IsNoOp()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 10000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+
+        // Progress end triggers first TransitionToReady
+        reader.Enqueue(MakeProgressBegin("t1", "Loading workspace"));
+        await Task.Delay(20, ct);
+        reader.Enqueue(MakeProgressEnd("t1"));
+        await Task.Delay(30, ct);
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+
+        // Second trigger via notification must be a safe no-op
+        reader.Enqueue(MakeNotification("workspace/projectInitializationComplete"));
+        await Task.Delay(50, ct);
+
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ProjectInitializationComplete_NotRelayedToClient()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 10000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+
+        reader.Enqueue(MakeNotification("workspace/projectInitializationComplete"));
+        await Task.Delay(50, ct);
+
+        Assert.False(transport.TryReadNext(out _), "workspace/projectInitializationComplete must not be relayed to client");
+
+        reader.Complete();
+    }
 }

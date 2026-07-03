@@ -238,7 +238,7 @@ public sealed class RoslynServerProcess : IChildServer
                                 count = _pendingRequests.Count;
                             }
                             if (stillLoading)
-                                _logger?.Info($"workspace load timeout ({_hardTimeoutMs}ms), forwarding {count} queued requests");
+                                _logger?.Info($"workspace load timeout ({_hardTimeoutMs}ms) fired as fallback, forwarding {count} queued requests");
                             _logger?.Debug("workspace ready via hard timeout");
                             await TransitionToReady();
                         }
@@ -269,6 +269,13 @@ public sealed class RoslynServerProcess : IChildServer
                         ["result"] = JsonValue.Create<object?>(null)
                     };
                     await WriteFrameAsync(SerializeFrame(response));
+                    continue;
+                }
+
+                if (method == "workspace/projectInitializationComplete")
+                {
+                    _logger?.Info($"server {_solutionPath} received workspace/projectInitializationComplete");
+                    await TransitionToReady();
                     continue;
                 }
 
