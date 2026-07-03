@@ -103,21 +103,29 @@ public sealed class MuxDispatcher
 
                 if (_logger?.IsEnabled == true)
                 {
-                    var state = server.IsInitialized ? "initialized" : "starting, queued";
+                    var state = server.Readiness.ToString().ToLowerInvariant();
                     _logger.Log($"[mux] route {method} → {solutionPath} (server: {state})");
                 }
 
-                if (method == "textDocument/didClose")
-                    _tracker.MarkClosed(server, uri);
-                else if (method == "textDocument/didOpen")
-                    _tracker.MarkOpened(server, uri);
-                else if (message["id"] is not null && !_tracker.IsOpened(server, uri))
-                    await EnsureOpenAsync(server, uri, filePath);
-
                 var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-                if (message["id"] is JsonNode requestId)
-                    _ledger.Register(JsonNodeToKey(requestId), server);
-                await server.ForwardRequestAsync(raw);
+                if (method == "textDocument/didClose")
+                {
+                    _tracker.MarkClosed(server, uri);
+                    await server.ForwardNotificationAsync(raw);
+                }
+                else if (method == "textDocument/didOpen")
+                {
+                    _tracker.MarkOpened(server, uri);
+                    await server.ForwardNotificationAsync(raw);
+                }
+                else
+                {
+                    if (message["id"] is not null && !_tracker.IsOpened(server, uri))
+                        await EnsureOpenAsync(server, uri, filePath);
+                    if (message["id"] is JsonNode requestId)
+                        _ledger.Register(JsonNodeToKey(requestId), server);
+                    await server.ForwardRequestAsync(raw);
+                }
             }
             else
             {
@@ -151,7 +159,7 @@ public sealed class MuxDispatcher
             }
         };
         var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(didOpen));
-        await server.ForwardRequestAsync(raw);
+        await server.ForwardNotificationAsync(raw);
         _tracker.MarkOpened(server, uri);
     }
 

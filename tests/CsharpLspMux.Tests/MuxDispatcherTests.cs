@@ -49,11 +49,13 @@ public class MuxDispatcherTests
     {
         public int DisposeCount;
         public readonly List<byte[]> ForwardedFrames = new();
+        public readonly List<byte[]> NotificationFrames = new();
         public Func<byte[], byte[]>? SendAndReceiveHandler { get; set; }
-        public bool IsInitialized { get; set; } = true;
+        public ServerReadiness Readiness { get; set; } = ServerReadiness.Ready;
         public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
 
         public Task ForwardRequestAsync(byte[] frame) { ForwardedFrames.Add(frame); return Task.CompletedTask; }
+        public Task ForwardNotificationAsync(byte[] frame) { NotificationFrames.Add(frame); return Task.CompletedTask; }
 
         public Task<byte[]> SendAndReceiveAsync(byte[] frame)
         {
@@ -192,7 +194,8 @@ public class MuxDispatcherTests
         var result = await dispatcher.HandleMessageAsync(msg);
 
         Assert.True(result);
-        Assert.Equal(2, server.ForwardedFrames.Count); // synthesized didOpen + hover
+        Assert.Single(server.NotificationFrames); // synthesized didOpen
+        Assert.Single(server.ForwardedFrames);    // hover request
         Assert.Empty(transport.Responses);
     }
 
@@ -466,13 +469,14 @@ public class MuxDispatcherTests
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
         await dispatcher.HandleMessageAsync(msg);
 
-        Assert.Equal(2, server.ForwardedFrames.Count);
-        var didOpen = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Single(server.NotificationFrames); // synthesized didOpen
+        Assert.Single(server.ForwardedFrames);    // hover request
+        var didOpen = JsonSerializer.Deserialize<JsonObject>(server.NotificationFrames[0])!;
         Assert.Equal("textDocument/didOpen", didOpen["method"]?.GetValue<string>());
         Assert.Equal(FileUri(filePath), didOpen["params"]?["textDocument"]?["uri"]?.GetValue<string>());
         Assert.Equal("csharp", didOpen["params"]?["textDocument"]?["languageId"]?.GetValue<string>());
         Assert.Equal(fileContent, didOpen["params"]?["textDocument"]?["text"]?.GetValue<string>());
-        var hover = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[1])!;
+        var hover = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
         Assert.Equal("textDocument/hover", hover["method"]?.GetValue<string>());
         Assert.Single(readFileCalls);
         Assert.Equal(filePath, readFileCalls[0]);
@@ -519,8 +523,9 @@ public class MuxDispatcherTests
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
         await dispatcher.HandleMessageAsync(didOpenMsg);
 
-        Assert.Single(server.ForwardedFrames);
-        var forwarded = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Single(server.NotificationFrames);
+        Assert.Empty(server.ForwardedFrames);
+        var forwarded = JsonSerializer.Deserialize<JsonObject>(server.NotificationFrames[0])!;
         Assert.Equal("textDocument/didOpen", forwarded["method"]?.GetValue<string>());
         Assert.Equal(0, readFileCount);
     }
@@ -542,12 +547,14 @@ public class MuxDispatcherTests
         await dispatcher.HandleMessageAsync(Msg("textDocument/didClose",
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
         server.ForwardedFrames.Clear();
+        server.NotificationFrames.Clear();
 
         await dispatcher.HandleMessageAsync(Msg("textDocument/hover", id: JsonValue.Create(3),
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
 
-        Assert.Equal(2, server.ForwardedFrames.Count);
-        var synthesized = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Single(server.NotificationFrames); // synthesized didOpen
+        Assert.Single(server.ForwardedFrames);    // hover request
+        var synthesized = JsonSerializer.Deserialize<JsonObject>(server.NotificationFrames[0])!;
         Assert.Equal("textDocument/didOpen", synthesized["method"]?.GetValue<string>());
         Assert.Equal(1, readFileCount);
     }
@@ -567,16 +574,84 @@ public class MuxDispatcherTests
         await dispatcher.HandleMessageAsync(Msg("textDocument/didOpen",
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
         server.ForwardedFrames.Clear();
+        server.NotificationFrames.Clear();
 
         pool.TriggerEviction(server);
 
         await dispatcher.HandleMessageAsync(Msg("textDocument/hover", id: JsonValue.Create(4),
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
 
-        Assert.Equal(2, server.ForwardedFrames.Count);
-        var synthesized = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Single(server.NotificationFrames); // synthesized didOpen
+        Assert.Single(server.ForwardedFrames);    // hover request
+        var synthesized = JsonSerializer.Deserialize<JsonObject>(server.NotificationFrames[0])!;
         Assert.Equal("textDocument/didOpen", synthesized["method"]?.GetValue<string>());
         Assert.Equal(1, readFileCount);
+    }
+
+    [Fact]
+    public async Task TextDocument_DidOpen_UsesForwardNotificationAsync()
+    {
+        var sln = "/repo/App.slnx";
+        var filePath = "/repo/src/Foo.cs";
+        var (dispatcher, _, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
+        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+
+        var didOpenMsg = Msg("textDocument/didOpen",
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
+        await dispatcher.HandleMessageAsync(didOpenMsg);
+
+        Assert.Single(server.NotificationFrames);
+        Assert.Empty(server.ForwardedFrames);
+        var forwarded = JsonSerializer.Deserialize<JsonObject>(server.NotificationFrames[0])!;
+        Assert.Equal("textDocument/didOpen", forwarded["method"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task TextDocument_DidClose_UsesForwardNotificationAsync()
+    {
+        var sln = "/repo/App.slnx";
+        var filePath = "/repo/src/Foo.cs";
+        var (dispatcher, _, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
+        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+
+        // Open first so close doesn't short-circuit
+        var uri = FileUri(filePath);
+        await dispatcher.HandleMessageAsync(Msg("textDocument/didOpen",
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
+        server.NotificationFrames.Clear();
+
+        var didCloseMsg = Msg("textDocument/didClose",
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } });
+        await dispatcher.HandleMessageAsync(didCloseMsg);
+
+        Assert.Single(server.NotificationFrames);
+        Assert.Empty(server.ForwardedFrames);
+        var forwarded = JsonSerializer.Deserialize<JsonObject>(server.NotificationFrames[0])!;
+        Assert.Equal("textDocument/didClose", forwarded["method"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task TextDocument_RequestWithId_UsesForwardRequestAsync()
+    {
+        var sln = "/repo/App.slnx";
+        var filePath = "/repo/src/Foo.cs";
+        var (dispatcher, _, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
+        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+
+        // Open first so no synthesized didOpen
+        var uri = FileUri(filePath);
+        await dispatcher.HandleMessageAsync(Msg("textDocument/didOpen",
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
+        server.NotificationFrames.Clear();
+
+        var hoverMsg = Msg("textDocument/hover", id: JsonValue.Create(99),
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } });
+        await dispatcher.HandleMessageAsync(hoverMsg);
+
+        Assert.Single(server.ForwardedFrames);
+        Assert.Empty(server.NotificationFrames);
+        var forwarded = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Equal("textDocument/hover", forwarded["method"]?.GetValue<string>());
     }
 
     [Fact]

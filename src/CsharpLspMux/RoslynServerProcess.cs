@@ -21,7 +21,7 @@ public sealed class RoslynServerProcess : IChildServer
     public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame;
 
     private readonly object _initLock = new();
-    private bool _initialized;
+    private ServerReadiness _readiness = ServerReadiness.Starting;
     private readonly List<byte[]> _pendingQueue = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
@@ -33,7 +33,7 @@ public sealed class RoslynServerProcess : IChildServer
     private int _syntheticIdCounter;
     private int _disposed;
 
-    public bool IsInitialized { get { lock (_initLock) return _initialized; } }
+    public ServerReadiness Readiness { get { lock (_initLock) return _readiness; } }
 
     private RoslynServerProcess(Stream stdin, IFrameReader reader, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null)
     {
@@ -134,11 +134,15 @@ public sealed class RoslynServerProcess : IChildServer
         _ = WriteFrameAsync(SerializeFrame(initRequest));
     }
 
-    public Task ForwardRequestAsync(byte[] frame)
+    public Task ForwardRequestAsync(byte[] frame) => ForwardFrameAsync(frame);
+
+    public Task ForwardNotificationAsync(byte[] frame) => ForwardFrameAsync(frame);
+
+    private Task ForwardFrameAsync(byte[] frame)
     {
         lock (_initLock)
         {
-            if (!_initialized)
+            if (_readiness == ServerReadiness.Starting)
             {
                 _pendingQueue.Add(frame);
                 return Task.CompletedTask;
@@ -165,7 +169,7 @@ public sealed class RoslynServerProcess : IChildServer
                     byte[][] pending;
                     lock (_initLock)
                     {
-                        _initialized = true;
+                        _readiness = ServerReadiness.Initialized;
                         pending = _pendingQueue.ToArray();
                         _pendingQueue.Clear();
                     }
@@ -176,6 +180,8 @@ public sealed class RoslynServerProcess : IChildServer
                     }
                     foreach (var f in pending)
                         await WriteFrameAsync(f);
+                    // In this slice: immediately promote to Ready — no progress gate yet (#47 adds it).
+                    lock (_initLock) { _readiness = ServerReadiness.Ready; }
                     continue;
                 }
 

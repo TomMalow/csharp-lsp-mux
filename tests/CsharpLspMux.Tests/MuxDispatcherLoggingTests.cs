@@ -19,9 +19,10 @@ public class MuxDispatcherLoggingTests
 
     private sealed class FakeServer : IChildServer
     {
-        public bool IsInitialized => true;
+        public ServerReadiness Readiness => ServerReadiness.Ready;
         public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
         public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
+        public Task ForwardNotificationAsync(byte[] frame) => Task.CompletedTask;
         public Task<byte[]> SendAndReceiveAsync(byte[] frame) => Task.FromResult(Array.Empty<byte>());
         public Task ShutdownAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -100,7 +101,7 @@ public class MuxDispatcherLoggingTests
         var output = writer.ToString();
         Assert.Contains("[mux] route textDocument/hover", output);
         Assert.Contains("App.slnx", output);
-        Assert.Contains("initialized", output);
+        Assert.Contains("ready", output);
     }
 
     [Fact]
@@ -118,14 +119,15 @@ public class MuxDispatcherLoggingTests
 
         var output = writer.ToString();
         Assert.Contains("[mux] route textDocument/hover", output);
-        Assert.Contains("starting, queued", output);
+        Assert.Contains("starting", output);
     }
 
     private sealed class NotInitializedFakeServer : IChildServer
     {
-        public bool IsInitialized => false;
+        public ServerReadiness Readiness => ServerReadiness.Starting;
         public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
         public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
+        public Task ForwardNotificationAsync(byte[] frame) => Task.CompletedTask;
         public Task<byte[]> SendAndReceiveAsync(byte[] frame) => Task.FromResult(Array.Empty<byte>());
         public Task ShutdownAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

@@ -295,7 +295,7 @@ public class RoslynServerProcessTests
 
         reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(50, ct);
-        Assert.True(server.IsInitialized, "server must be initialized after response");
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
 
         var lengthBeforeForward = stdin.Length;
         var frame = MakeFrame(MakeNotification("textDocument/hover"));
@@ -367,7 +367,7 @@ public class RoslynServerProcessTests
 
         reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(50, ct);
-        Assert.True(server.IsInitialized);
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
 
         var stdinLengthAfterInit = stdin.Length;
 
@@ -409,6 +409,93 @@ public class RoslynServerProcessTests
         var output = logWriter.ToString();
         Assert.Contains("[mux] server /repo/App.slnx initialized in", output);
         Assert.Contains("ms", output);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task Readiness_InitialState_IsStarting()
+    {
+        var reader = new FakeFrameReader();
+        await using var server = RoslynServerProcess.CreateForTest(new MemoryStream(), reader);
+
+        Assert.Equal(ServerReadiness.Starting, server.Readiness);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task Readiness_AfterInitResponse_IsReady()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        await using var server = RoslynServerProcess.CreateForTest(new MemoryStream(), reader);
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(100, ct);
+
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ForwardNotification_PreInit_TaskCompletesImmediately()
+    {
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport);
+
+        var frame = MakeFrame(MakeNotification("textDocument/didOpen"));
+        var forwardTask = server.ForwardNotificationAsync(frame);
+
+        Assert.True(forwardTask.IsCompleted, "pre-init notification forward must return immediately (frame queued, not blocking)");
+        Assert.Equal(0, stdin.Length);
+
+        reader.Complete();
+        await server.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ForwardNotification_PreInit_FlushesAfterInitialized()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport);
+        await using var _ = server;
+
+        var frame = MakeFrame(MakeNotification("textDocument/didOpen"));
+        await server.ForwardNotificationAsync(frame);
+
+        Assert.Equal(0, stdin.Length);
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(100, ct);
+
+        Assert.True(stdin.Length > 0, "notification frame must be written to stdin after init");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ForwardNotification_AfterInit_WritesImmediately()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(50, ct);
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+
+        var lengthBefore = stdin.Length;
+        var frame = MakeFrame(MakeNotification("textDocument/didOpen"));
+        await server.ForwardNotificationAsync(frame);
+
+        Assert.True(stdin.Length > lengthBefore, "post-init notification forward must write immediately");
 
         reader.Complete();
     }

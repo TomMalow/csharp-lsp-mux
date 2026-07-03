@@ -6,9 +6,10 @@ public class OpenFileTrackerTests
 {
     private sealed class StubServer : IChildServer
     {
-        public bool IsInitialized => true;
+        public ServerReadiness Readiness => ServerReadiness.Ready;
         public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
         public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
+        public Task ForwardNotificationAsync(byte[] frame) => Task.CompletedTask;
         public Task<byte[]> SendAndReceiveAsync(byte[] frame) => Task.FromResult(Array.Empty<byte>());
         public Task ShutdownAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

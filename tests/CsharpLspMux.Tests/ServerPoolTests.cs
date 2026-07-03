@@ -14,10 +14,11 @@ public sealed class ServerPoolTests
         public int ShutdownCount;
         public int ShutdownBeforeDisposeCount;
         public byte[]? LastSentFrame;
-        public bool IsInitialized => true;
+        public ServerReadiness Readiness => ServerReadiness.Ready;
         public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
 
         public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
+        public Task ForwardNotificationAsync(byte[] frame) => Task.CompletedTask;
 
         public Task<byte[]> SendAndReceiveAsync(byte[] frame)
         {
