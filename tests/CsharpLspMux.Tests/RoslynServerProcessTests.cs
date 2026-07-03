@@ -330,6 +330,41 @@ public class RoslynServerProcessTests
     }
 
     [Fact]
+    public async Task WorkspaceConfiguration_Request_InterceptedAndAnswered()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(50, ct);
+        Assert.True(server.IsInitialized);
+
+        var stdinLengthAfterInit = stdin.Length;
+
+        var configRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 99,
+            ["method"] = "workspace/configuration",
+            ["params"] = new JsonObject { ["items"] = new JsonArray() }
+        };
+        reader.Enqueue(configRequest);
+        await Task.Delay(100, ct);
+
+        // Response must be written back to the child server (stdin grew), not relayed to the client
+        Assert.True(stdin.Length > stdinLengthAfterInit, "response must be written to child server stdin");
+
+        var stdinContent = Encoding.UTF8.GetString(stdin.ToArray());
+        Assert.Contains("\"id\":99", stdinContent);
+        Assert.Contains("\"result\":[{}]", stdinContent);
+
+        reader.Complete();
+    }
+
+    [Fact]
     public async Task InitializeResponse_LogsInitializedWithElapsedTime()
     {
         var ct = TestContext.Current.CancellationToken;

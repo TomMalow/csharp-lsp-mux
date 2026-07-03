@@ -193,6 +193,20 @@ public sealed class RoslynServerProcess : IChildServer
                     }
                 }
 
+                // Intercept workspace/configuration requests — respond with empty settings so Roslyn
+                // doesn't stall waiting for a client that can't answer server-initiated requests.
+                if (method == "workspace/configuration" && message["id"] is JsonNode configId)
+                {
+                    var response = new JsonObject
+                    {
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = configId.DeepClone(),
+                        ["result"] = new JsonArray(new JsonObject())
+                    };
+                    await WriteFrameAsync(SerializeFrame(response));
+                    continue;
+                }
+
                 // Relay responses and notifications back to the client (stdout of proxy)
                 if (message["id"] is not null || method is not null)
                     await _clientTransport.WriteFrameAsync(rawBytes);
