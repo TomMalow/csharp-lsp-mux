@@ -34,5 +34,5 @@ public sealed class MuxLogger(LogLevel level, TextWriter writer)
     }
 
     private void Write(string message) =>
-        writer.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [mux] {message}");
+        writer.WriteLine($"[{DateTime.Now.ToString("HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)}] [mux] {message}");
 }
