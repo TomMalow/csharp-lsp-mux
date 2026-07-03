@@ -51,6 +51,7 @@ public class MuxDispatcherTests
         public readonly List<byte[]> ForwardedFrames = new();
         public Func<byte[], byte[]>? SendAndReceiveHandler { get; set; }
         public bool IsInitialized { get; set; } = true;
+        public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
 
         public Task ForwardRequestAsync(byte[] frame) { ForwardedFrames.Add(frame); return Task.CompletedTask; }
 

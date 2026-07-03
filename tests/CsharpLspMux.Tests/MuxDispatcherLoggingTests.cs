@@ -20,6 +20,7 @@ public class MuxDispatcherLoggingTests
     private sealed class FakeServer : IChildServer
     {
         public bool IsInitialized => true;
+        public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
         public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
         public Task<byte[]> SendAndReceiveAsync(byte[] frame) => Task.FromResult(Array.Empty<byte>());
         public Task ShutdownAsync() => Task.CompletedTask;
@@ -123,6 +124,7 @@ public class MuxDispatcherLoggingTests
     private sealed class NotInitializedFakeServer : IChildServer
     {
         public bool IsInitialized => false;
+        public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
         public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
         public Task<byte[]> SendAndReceiveAsync(byte[] frame) => Task.FromResult(Array.Empty<byte>());
         public Task ShutdownAsync() => Task.CompletedTask;

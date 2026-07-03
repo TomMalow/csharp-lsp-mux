@@ -75,7 +75,9 @@ public class RoslynServerProcessTests
     private static (RoslynServerProcess Server, MemoryStream Stdin) MakeServerWithStdin(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null, MuxLogger? logger = null, string? solutionPath = null, string? solutionDir = null)
     {
         var stdin = new MemoryStream();
-        return (RoslynServerProcess.CreateForTest(stdin, reader, transport, onDispose, logger, solutionPath, solutionDir), stdin);
+        var server = RoslynServerProcess.CreateForTest(stdin, reader, onDispose, logger, solutionPath, solutionDir);
+        server.OnRelayFrame += frame => new ValueTask(transport.WriteFrameAsync(frame));
+        return (server, stdin);
     }
 
     private static RoslynServerProcess MakeServer(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null)
@@ -128,7 +130,7 @@ public class RoslynServerProcessTests
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
         var stdin = new MemoryStream();
-        await using var server = RoslynServerProcess.CreateForTest(stdin, reader, transport);
+        await using var server = RoslynServerProcess.CreateForTest(stdin, reader);
 
         reader.Enqueue(MakeInitializeResponse());
         // Wait for read loop to process initialize response and send "initialized"
@@ -201,7 +203,7 @@ public class RoslynServerProcessTests
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
         var onDisposeCalled = false;
-        await using (RoslynServerProcess.CreateForTest(new MemoryStream(), reader, transport, () => { onDisposeCalled = true; return Task.CompletedTask; }))
+        await using (RoslynServerProcess.CreateForTest(new MemoryStream(), reader, () => { onDisposeCalled = true; return Task.CompletedTask; }))
         {
             // Reader stays open — read loop is blocking
             await Task.Delay(20, ct);
@@ -226,6 +228,29 @@ public class RoslynServerProcessTests
 
         var relayed = await transport.ReadNextAsync(ct);
         Assert.Equal("textDocument/publishDiagnostics", relayed["method"]!.GetValue<string>());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ReadLoop_RelayFrameArrivesViaOnRelayFrameEvent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var relayedFrames = new List<byte[]>();
+        var stdin = new MemoryStream();
+        await using var server = RoslynServerProcess.CreateForTest(stdin, reader);
+        server.OnRelayFrame += frame => { relayedFrames.Add(frame.ToArray()); return ValueTask.CompletedTask; };
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(20, ct);
+
+        reader.Enqueue(MakeNotification("textDocument/publishDiagnostics"));
+        await Task.Delay(50, ct);
+
+        Assert.Single(relayedFrames);
+        var parsed = JsonSerializer.Deserialize<JsonObject>(relayedFrames[0])!;
+        Assert.Equal("textDocument/publishDiagnostics", parsed["method"]!.GetValue<string>());
 
         reader.Complete();
     }

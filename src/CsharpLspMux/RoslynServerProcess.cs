@@ -14,10 +14,11 @@ public sealed class RoslynServerProcess : IChildServer
 {
     private readonly Stream _stdin;
     private readonly IFrameReader _reader;
-    private readonly IFrameWriter _clientTransport;
     private readonly Func<Task>? _onDispose;
     private readonly MuxLogger? _logger;
     private readonly string? _solutionPath;
+
+    public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame;
 
     private readonly object _initLock = new();
     private bool _initialized;
@@ -34,11 +35,10 @@ public sealed class RoslynServerProcess : IChildServer
 
     public bool IsInitialized { get { lock (_initLock) return _initialized; } }
 
-    private RoslynServerProcess(Stream stdin, IFrameReader reader, IFrameWriter clientTransport, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null)
+    private RoslynServerProcess(Stream stdin, IFrameReader reader, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null)
     {
         _stdin = stdin;
         _reader = reader;
-        _clientTransport = clientTransport;
         _onDispose = onDispose;
         _logger = logger;
         _solutionPath = solutionPath;
@@ -48,19 +48,18 @@ public sealed class RoslynServerProcess : IChildServer
     internal static RoslynServerProcess CreateForTest(
         Stream stdin,
         IFrameReader reader,
-        IFrameWriter clientTransport,
         Func<Task>? onDispose = null,
         MuxLogger? logger = null,
         string? solutionPath = null,
         string? solutionDir = null)
     {
-        var server = new RoslynServerProcess(stdin, reader, clientTransport, onDispose, logger, solutionPath);
+        var server = new RoslynServerProcess(stdin, reader, onDispose, logger, solutionPath);
         if (solutionPath != null && solutionDir != null)
             server.SendInitialize(solutionPath, solutionDir);
         return server;
     }
 
-    public static RoslynServerProcess Start(string solutionPath, IFrameWriter clientTransport, MuxLogger? logger = null)
+    public static RoslynServerProcess Start(string solutionPath, MuxLogger? logger = null)
     {
         var solutionDir = Path.GetDirectoryName(solutionPath)!;
 
@@ -78,7 +77,6 @@ public sealed class RoslynServerProcess : IChildServer
         var server = new RoslynServerProcess(
             process.StandardInput.BaseStream,
             new LspFrameReader(process.StandardOutput.BaseStream),
-            clientTransport,
             async () =>
             {
                 if (!process.HasExited)
@@ -209,7 +207,12 @@ public sealed class RoslynServerProcess : IChildServer
 
                 // Relay responses and notifications back to the client (stdout of proxy)
                 if (message["id"] is not null || method is not null)
-                    await _clientTransport.WriteFrameAsync(rawBytes);
+                {
+                    if (OnRelayFrame is { } relay)
+                        await relay(rawBytes);
+                    else
+                        _logger?.Log($"[mux] server {_solutionPath}: no relay subscriber, frame dropped");
+                }
             }
         }
         catch (OperationCanceledException) { }
