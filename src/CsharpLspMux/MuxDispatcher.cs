@@ -27,7 +27,7 @@ public sealed class MuxDispatcher
         _transport = transport;
         _readFile = readFile ?? (path => File.ReadAllTextAsync(path));
         _logger = logger;
-        pool.Evicted += NotifyEviction;
+        pool.OnEviction = s => { NotifyEviction(s); return Task.CompletedTask; };
     }
 
     public Task<bool> HandleMessageAsync(JsonObject message)

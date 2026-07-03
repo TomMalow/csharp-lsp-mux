@@ -31,7 +31,7 @@ var lspTransport = new LspTransport(Console.OpenStandardOutput());
 var repoRoot = Environment.GetEnvironmentVariable("REPO_ROOT") ?? Directory.GetCurrentDirectory();
 var config = new MuxConfig(repoRoot);
 var router = new SolutionRouter(repoRoot);
-var pool = new ServerPool<IChildServer>(config.MaxServers, CreateServer);
+var pool = new ServerPool<IChildServer>(config.MaxServers, CreateServer, logger);
 
 Task<IChildServer> CreateServer(string sln)
 {

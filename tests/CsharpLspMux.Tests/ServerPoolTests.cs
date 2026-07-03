@@ -157,17 +157,74 @@ public sealed class ServerPoolTests
     }
 
     [Fact]
-    public async Task Evicted_RaisedWithEvictedServer()
+    public async Task OnEviction_CalledWithEvictedServer_AfterDispose()
     {
-        FakeServer? evicted = null;
+        FakeServer? handlerArg = null;
+        int disposeCountInHandler = -1;
         var pool = MakePool(2);
-        pool.Evicted += s => evicted = s;
+        pool.OnEviction = s =>
+        {
+            handlerArg = s;
+            disposeCountInHandler = s.DisposeCount;
+            return Task.CompletedTask;
+        };
 
         var a = await pool.GetOrAddAsync("slnA");
         await pool.GetOrAddAsync("slnB");
         await pool.GetOrAddAsync("slnC"); // evicts slnA
 
-        Assert.Same(a, evicted);
+        Assert.Same(a, handlerArg);
+        Assert.Equal(1, disposeCountInHandler); // handler ran after DisposeAsync
+    }
+
+    [Fact]
+    public async Task OnEviction_HandlerThrows_DoesNotPropagateToPool()
+    {
+        var pool = MakePool(2);
+        pool.OnEviction = _ => throw new InvalidOperationException("handler error");
+
+        await pool.GetOrAddAsync("slnA");
+        await pool.GetOrAddAsync("slnB");
+
+        var ex = await Record.ExceptionAsync(() => pool.GetOrAddAsync("slnC"));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public async Task OnEviction_HandlerThrows_LogsError()
+    {
+        var logOutput = new StringWriter();
+        var logger = new MuxLogger(enabled: true, logOutput);
+        var pool = new ServerPool<FakeServer>(cap: 2, factory: _ => Task.FromResult(new FakeServer()), logger: logger);
+        pool.OnEviction = _ => throw new InvalidOperationException("boom");
+
+        await pool.GetOrAddAsync("slnA");
+        await pool.GetOrAddAsync("slnB");
+        await pool.GetOrAddAsync("slnC"); // evicts slnA, handler throws
+
+        Assert.Contains("boom", logOutput.ToString());
+    }
+
+    [Fact]
+    public async Task Integration_LruOverflow_HandlerCalledForEachEviction()
+    {
+        var evictedServers = new List<FakeServer>();
+        var pool = new ServerPool<FakeServer>(cap: 2, factory: _ => Task.FromResult(new FakeServer()));
+        pool.OnEviction = s => { evictedServers.Add(s); return Task.CompletedTask; };
+
+        var a = await pool.GetOrAddAsync("slnA");
+        var b = await pool.GetOrAddAsync("slnB");
+        await pool.GetOrAddAsync("slnC"); // evicts slnA
+
+        Assert.Single(evictedServers);
+        Assert.Same(a, evictedServers[0]);
+        Assert.Equal(1, a.DisposeCount);
+
+        await pool.GetOrAddAsync("slnD"); // evicts slnB
+
+        Assert.Equal(2, evictedServers.Count);
+        Assert.Same(b, evictedServers[1]);
+        Assert.Equal(1, b.DisposeCount);
     }
 
     [Fact]

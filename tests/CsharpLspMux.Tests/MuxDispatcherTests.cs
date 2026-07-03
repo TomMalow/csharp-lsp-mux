@@ -83,7 +83,7 @@ public class MuxDispatcherTests
     {
         private readonly Dictionary<string, IChildServer> _servers = new();
 
-        public event Action<IChildServer>? Evicted;
+        public Func<IChildServer, Task>? OnEviction { get; set; }
 
         public Task<IChildServer> GetOrAddAsync(string key)
         {
@@ -99,7 +99,7 @@ public class MuxDispatcherTests
 
         public Task DisposeAllAsync() => Task.CompletedTask;
 
-        public void TriggerEviction(IChildServer server) => Evicted?.Invoke(server);
+        public Task TriggerEviction(IChildServer server) => OnEviction?.Invoke(server) ?? Task.CompletedTask;
     }
 
     // --- helpers ---
@@ -576,7 +576,7 @@ public class MuxDispatcherTests
         server.ForwardedFrames.Clear();
         server.NotificationFrames.Clear();
 
-        pool.TriggerEviction(server);
+        await pool.TriggerEviction(server);
 
         await dispatcher.HandleMessageAsync(Msg("textDocument/hover", id: JsonValue.Create(4),
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
@@ -699,7 +699,7 @@ public class MuxDispatcherTests
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri("/repo/src/Foo.cs") } });
         await dispatcher.HandleMessageAsync(textDocMsg);
 
-        pool.TriggerEviction(server);
+        await pool.TriggerEviction(server);
 
         // Cancel should no longer forward (owner was evicted)
         server.ForwardedFrames.Clear();

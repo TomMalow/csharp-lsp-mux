@@ -8,15 +8,14 @@ public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : I
 {
     private readonly int _cap;
     private readonly Func<string, Task<TServer>> _factory;
+    private readonly MuxLogger? _logger;
 
     // Ordered by recency: last = most recently used.
     private readonly LinkedList<(string Key, TServer Server)> _lru = new();
     private readonly Dictionary<string, LinkedListNode<(string Key, TServer Server)>> _index = new();
 
-    /// <summary>
-    /// Raised synchronously when a server is evicted by LRU. Not raised during DisposeAllAsync.
-    /// </summary>
-    public event Action<TServer>? Evicted;
+    /// <inheritdoc/>
+    public Func<TServer, Task>? OnEviction { get; set; }
 
     /// <summary>
     /// Called before DisposeAsync on each server during session drain. Use for graceful LSP shutdown.
@@ -24,10 +23,11 @@ public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : I
     /// </summary>
     public Func<TServer, Task>? OnGracefulShutdown { get; set; }
 
-    public ServerPool(int cap, Func<string, Task<TServer>> factory)
+    public ServerPool(int cap, Func<string, Task<TServer>> factory, MuxLogger? logger = null)
     {
         _cap = cap;
         _factory = factory;
+        _logger = logger;
     }
 
     public IEnumerable<TServer> ActiveServers => _lru.Select(e => e.Server);
@@ -71,7 +71,9 @@ public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : I
         var oldest = _lru.First!;
         _lru.RemoveFirst();
         _index.Remove(oldest.Value.Key);
-        Evicted?.Invoke(oldest.Value.Server);
         try { await oldest.Value.Server.DisposeAsync(); } catch { }
+        if (OnEviction is { } handler)
+            try { await handler(oldest.Value.Server); }
+            catch (Exception ex) { _logger?.Log($"[pool] OnEviction handler threw: {ex.Message}"); }
     }
 }
