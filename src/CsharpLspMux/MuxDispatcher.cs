@@ -11,8 +11,8 @@ public sealed class MuxDispatcher
     private readonly IFrameWriter _transport;
     private readonly Func<string, Task<string>> _readFile;
     private readonly MuxLogger? _logger;
-    private readonly Dictionary<string, IChildServer> _requestOwners = new();
-    private readonly Dictionary<IChildServer, HashSet<string>> _openedUris = new();
+    private readonly RequestLedger _ledger = new();
+    private readonly OpenFileTracker _tracker = new();
     private bool _poolDrained;
 
     public MuxDispatcher(
@@ -108,15 +108,15 @@ public sealed class MuxDispatcher
                 }
 
                 if (method == "textDocument/didClose")
-                    MarkClosed(server, uri);
+                    _tracker.MarkClosed(server, uri);
                 else if (method == "textDocument/didOpen")
-                    MarkOpened(server, uri);
-                else if (message["id"] is not null && !IsOpened(server, uri))
+                    _tracker.MarkOpened(server, uri);
+                else if (message["id"] is not null && !_tracker.IsOpened(server, uri))
                     await EnsureOpenAsync(server, uri, filePath);
 
                 var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
                 if (message["id"] is JsonNode requestId)
-                    _requestOwners[JsonNodeToKey(requestId)] = server;
+                    _ledger.Register(JsonNodeToKey(requestId), server);
                 await server.ForwardRequestAsync(raw);
             }
             else
@@ -128,22 +128,6 @@ public sealed class MuxDispatcher
         }
         return true;
     }
-
-    private void MarkOpened(IChildServer server, string uri)
-    {
-        if (!_openedUris.TryGetValue(server, out var set))
-            _openedUris[server] = set = new HashSet<string>();
-        set.Add(uri);
-    }
-
-    private void MarkClosed(IChildServer server, string uri)
-    {
-        if (_openedUris.TryGetValue(server, out var set))
-            set.Remove(uri);
-    }
-
-    private bool IsOpened(IChildServer server, string uri) =>
-        _openedUris.TryGetValue(server, out var set) && set.Contains(uri);
 
     private async Task EnsureOpenAsync(IChildServer server, string uri, string filePath)
     {
@@ -168,7 +152,7 @@ public sealed class MuxDispatcher
         };
         var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(didOpen));
         await server.ForwardRequestAsync(raw);
-        MarkOpened(server, uri);
+        _tracker.MarkOpened(server, uri);
     }
 
     private async Task<bool> HandleCancelRequest(JsonObject message)
@@ -177,9 +161,10 @@ public sealed class MuxDispatcher
         if (cancelId is not null)
         {
             var key = JsonNodeToKey(cancelId);
-            if (_requestOwners.TryGetValue(key, out var owner))
+            var owner = _ledger.Lookup(key);
+            if (owner is not null)
             {
-                _requestOwners.Remove(key);
+                _ledger.Remove(key);
                 var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
                 await owner.ForwardRequestAsync(raw);
             }
@@ -270,9 +255,8 @@ public sealed class MuxDispatcher
 
     private void NotifyEviction(IChildServer evicted)
     {
-        foreach (var key in _requestOwners.Keys.Where(k => _requestOwners[k] == evicted).ToList())
-            _requestOwners.Remove(key);
-        _openedUris.Remove(evicted);
+        _ledger.EvictServer(evicted);
+        _tracker.EvictServer(evicted);
     }
 
     private static string JsonNodeToKey(JsonNode node) => node.ToJsonString();
