@@ -3,36 +3,33 @@ namespace CsharpLspMux;
 public static class MuxLoggerFactory
 {
     /// <summary>
-    /// Creates a MuxLogger from configuration inputs.
-    /// Precedence: flag (stderr) > LSP_MUX_LOG_FILE (file) > LSP_MUX_LOG=debug (stderr) > disabled.
-    /// The --log-level debug flag always writes to stderr, ignoring LSP_MUX_LOG_FILE.
+    /// Creates a <see cref="MuxLogger"/> from a resolved log level and optional file path.
+    /// Returns null when <paramref name="level"/> is <see cref="LogLevel.Off"/>.
+    /// When <paramref name="filePath"/> is provided, writes to that file (AutoFlush=true);
+    /// falls back to <paramref name="stderr"/> with a warning on open failure.
     /// </summary>
     public static (MuxLogger? Logger, StreamWriter? FileWriter) Create(
-        string? logFilePath,
-        bool debugFlagEnabled,
-        bool debugEnvEnabled,
+        LogLevel level,
+        string? filePath,
         TextWriter stderr)
     {
-        if (debugFlagEnabled)
-            return (new MuxLogger(LogLevel.Debug, stderr), null);
+        if (level == LogLevel.Off)
+            return (null, null);
 
-        if (logFilePath is not null)
+        if (filePath is not null)
         {
             try
             {
-                var fileWriter = new StreamWriter(logFilePath, append: true) { AutoFlush = true };
-                return (new MuxLogger(LogLevel.Debug, fileWriter), fileWriter);
+                var fileWriter = new StreamWriter(filePath, append: true) { AutoFlush = true };
+                return (new MuxLogger(level, fileWriter), fileWriter);
             }
             catch (Exception ex)
             {
-                stderr.WriteLine($"[mux] warning: cannot open log file '{logFilePath}': {ex.Message} — falling back to stderr");
-                return (new MuxLogger(LogLevel.Debug, stderr), null);
+                stderr.WriteLine($"[mux] warning: cannot open log file '{filePath}': {ex.Message} — falling back to stderr");
+                return (new MuxLogger(level, stderr), null);
             }
         }
 
-        if (debugEnvEnabled)
-            return (new MuxLogger(LogLevel.Debug, stderr), null);
-
-        return (null, null);
+        return (new MuxLogger(level, stderr), null);
     }
 }

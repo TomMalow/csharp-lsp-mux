@@ -19,11 +19,22 @@ if (args.Length >= 1 && args[0] == "config")
 
 var flagIndex = Array.IndexOf(args, "--log-level");
 var logLevelArg = flagIndex >= 0 && flagIndex + 1 < args.Length ? args[flagIndex + 1] : null;
-var debugFlagEnabled = string.Equals(logLevelArg, "debug", StringComparison.OrdinalIgnoreCase) && flagIndex >= 0;
-var debugEnvEnabled = string.Equals(Environment.GetEnvironmentVariable("LSP_MUX_LOG"), "debug", StringComparison.OrdinalIgnoreCase);
-var logFilePath = Environment.GetEnvironmentVariable("LSP_MUX_LOG_FILE");
 
-var (logger, logFileWriter) = MuxLoggerFactory.Create(logFilePath, debugFlagEnabled, debugEnvEnabled, Console.Error);
+static LogLevel? ParseLevel(string? s) => s?.ToLowerInvariant() switch
+{
+    "off" => LogLevel.Off,
+    "info" => LogLevel.Info,
+    "debug" => LogLevel.Debug,
+    _ => null
+};
+
+var flagLevel = flagIndex >= 0 ? ParseLevel(logLevelArg) : null;
+var envLevel = ParseLevel(Environment.GetEnvironmentVariable("LSP_MUX_LOG_LEVEL"));
+var resolvedLevel = flagLevel ?? envLevel ?? LogLevel.Off;
+// --log-level flag always writes to stderr; LSP_MUX_LOG_OUTPUT_FILE only applies when using env var
+var filePath = flagLevel.HasValue ? null : Environment.GetEnvironmentVariable("LSP_MUX_LOG_OUTPUT_FILE");
+
+var (logger, logFileWriter) = MuxLoggerFactory.Create(resolvedLevel, filePath, Console.Error);
 
 var stdinReader = new LspFrameReader(Console.OpenStandardInput());
 var lspTransport = new LspTransport(Console.OpenStandardOutput());
