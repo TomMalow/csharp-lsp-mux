@@ -25,14 +25,16 @@ public class RoslynServerProcessTests
         public void Dispose() => Complete();
     }
 
-    private sealed class FakeTransport : ILspTransport
+    private sealed class FakeTransport : IFrameWriter
     {
         private readonly System.Threading.Channels.Channel<byte[]> _channel =
             System.Threading.Channels.Channel.CreateUnbounded<byte[]>();
 
-        public Task WriteFrameAsync(byte[] frame) { _channel.Writer.TryWrite(frame); return Task.CompletedTask; }
-        public Task SendResponseAsync(JsonNode? id, JsonNode result) => Task.CompletedTask;
-        public Task SendErrorAsync(JsonNode? id, int code, string message) => Task.CompletedTask;
+        public Task WriteFrameAsync(ReadOnlyMemory<byte> frame, CancellationToken ct = default)
+        {
+            _channel.Writer.TryWrite(frame.ToArray());
+            return Task.CompletedTask;
+        }
 
         public async Task<JsonObject> ReadNextAsync(CancellationToken ct = default)
         {

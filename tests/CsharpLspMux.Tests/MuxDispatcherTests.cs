@@ -9,15 +9,31 @@ public class MuxDispatcherTests
 {
     // --- fakes ---
 
-    private sealed class FakeTransport : ILspTransport
+    private sealed class FakeTransport : IFrameWriter
     {
         public readonly List<byte[]> WrittenFrames = new();
-        public readonly List<(JsonNode? Id, JsonNode Result)> Responses = new();
-        public readonly List<(JsonNode? Id, int Code, string Message)> Errors = new();
 
-        public Task WriteFrameAsync(byte[] frame) { WrittenFrames.Add(frame); return Task.CompletedTask; }
-        public Task SendResponseAsync(JsonNode? id, JsonNode result) { Responses.Add((id, result)); return Task.CompletedTask; }
-        public Task SendErrorAsync(JsonNode? id, int code, string message) { Errors.Add((id, code, message)); return Task.CompletedTask; }
+        public Task WriteFrameAsync(ReadOnlyMemory<byte> frame, CancellationToken ct = default)
+        {
+            WrittenFrames.Add(frame.ToArray());
+            return Task.CompletedTask;
+        }
+
+        public List<(JsonNode? Id, JsonNode Result)> Responses =>
+            WrittenFrames
+                .Select(f => JsonSerializer.Deserialize<JsonObject>(f)!)
+                .Where(f => f.ContainsKey("result"))
+                .Select(f => ((JsonNode?)f["id"]?.DeepClone(), f["result"]!.DeepClone()))
+                .ToList();
+
+        public List<(JsonNode? Id, int Code, string Message)> Errors =>
+            WrittenFrames
+                .Select(f => JsonSerializer.Deserialize<JsonObject>(f)!)
+                .Where(f => f.ContainsKey("error"))
+                .Select(f => ((JsonNode?)f["id"]?.DeepClone(),
+                    f["error"]!["code"]!.GetValue<int>(),
+                    f["error"]!["message"]!.GetValue<string>()))
+                .ToList();
     }
 
     private sealed class FakeRouter : ISolutionRouter

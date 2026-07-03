@@ -8,7 +8,7 @@ public sealed class MuxDispatcher
 {
     private readonly ISolutionRouter _router;
     private readonly IServerPool<IChildServer> _pool;
-    private readonly ILspTransport _transport;
+    private readonly IFrameWriter _transport;
     private readonly Func<string, Task<string>> _readFile;
     private readonly MuxLogger? _logger;
     private readonly Dictionary<string, IChildServer> _requestOwners = new();
@@ -18,7 +18,7 @@ public sealed class MuxDispatcher
     public MuxDispatcher(
         ISolutionRouter router,
         IServerPool<IChildServer> pool,
-        ILspTransport transport,
+        IFrameWriter transport,
         Func<string, Task<string>>? readFile = null,
         MuxLogger? logger = null)
     {

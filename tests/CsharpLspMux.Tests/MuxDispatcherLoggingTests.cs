@@ -1,15 +1,12 @@
-using System.Text.Json.Nodes;
 using Xunit;
 
 namespace CsharpLspMux.Tests;
 
 public class MuxDispatcherLoggingTests
 {
-    private sealed class FakeTransport : ILspTransport
+    private sealed class FakeTransport : IFrameWriter
     {
-        public Task WriteFrameAsync(byte[] frame) => Task.CompletedTask;
-        public Task SendResponseAsync(JsonNode? id, JsonNode result) => Task.CompletedTask;
-        public Task SendErrorAsync(JsonNode? id, int code, string message) => Task.CompletedTask;
+        public Task WriteFrameAsync(ReadOnlyMemory<byte> frame, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class FakeRouter : ISolutionRouter

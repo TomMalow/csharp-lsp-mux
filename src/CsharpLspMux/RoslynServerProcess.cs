@@ -14,7 +14,7 @@ public sealed class RoslynServerProcess : IChildServer
 {
     private readonly Stream _stdin;
     private readonly IFrameReader _reader;
-    private readonly ILspTransport _clientTransport;
+    private readonly IFrameWriter _clientTransport;
     private readonly Func<Task>? _onDispose;
     private readonly MuxLogger? _logger;
     private readonly string? _solutionPath;
@@ -34,7 +34,7 @@ public sealed class RoslynServerProcess : IChildServer
 
     public bool IsInitialized { get { lock (_initLock) return _initialized; } }
 
-    private RoslynServerProcess(Stream stdin, IFrameReader reader, ILspTransport clientTransport, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null)
+    private RoslynServerProcess(Stream stdin, IFrameReader reader, IFrameWriter clientTransport, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null)
     {
         _stdin = stdin;
         _reader = reader;
@@ -48,7 +48,7 @@ public sealed class RoslynServerProcess : IChildServer
     internal static RoslynServerProcess CreateForTest(
         Stream stdin,
         IFrameReader reader,
-        ILspTransport clientTransport,
+        IFrameWriter clientTransport,
         Func<Task>? onDispose = null,
         MuxLogger? logger = null,
         string? solutionPath = null,
@@ -60,7 +60,7 @@ public sealed class RoslynServerProcess : IChildServer
         return server;
     }
 
-    public static RoslynServerProcess Start(string solutionPath, ILspTransport clientTransport, MuxLogger? logger = null)
+    public static RoslynServerProcess Start(string solutionPath, IFrameWriter clientTransport, MuxLogger? logger = null)
     {
         var solutionDir = Path.GetDirectoryName(solutionPath)!;
 
