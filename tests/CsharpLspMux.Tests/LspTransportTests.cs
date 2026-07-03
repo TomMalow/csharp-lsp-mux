@@ -15,7 +15,7 @@ public class LspTransportTests
         using var output = new MemoryStream();
         var transport = new LspTransport(output);
 
-        await transport.WriteFrameAsync(body);
+        await transport.WriteFrameAsync(body, TestContext.Current.CancellationToken);
 
         output.Position = 0;
         var written = Encoding.UTF8.GetString(output.ToArray());
@@ -29,7 +29,7 @@ public class LspTransportTests
         using var output = new MemoryStream();
         var transport = new LspTransport(output);
 
-        await transport.SendResponseAsync(JsonValue.Create(42), new JsonObject { ["ok"] = true });
+        await transport.SendResponseAsync(JsonValue.Create(42), new JsonObject { ["ok"] = true }, TestContext.Current.CancellationToken);
 
         output.Position = 0;
         var text = Encoding.UTF8.GetString(output.ToArray());
@@ -47,7 +47,7 @@ public class LspTransportTests
         using var output = new MemoryStream();
         var transport = new LspTransport(output);
 
-        await transport.SendErrorAsync(JsonValue.Create(7), -32001, "No solution found for file: /repo/Foo.cs");
+        await transport.SendErrorAsync(JsonValue.Create(7), -32001, "No solution found for file: /repo/Foo.cs", TestContext.Current.CancellationToken);
 
         output.Position = 0;
         var text = Encoding.UTF8.GetString(output.ToArray());

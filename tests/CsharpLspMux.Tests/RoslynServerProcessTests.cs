@@ -82,7 +82,7 @@ public class RoslynServerProcessTests
         => MakeServerWithStdin(reader, transport, onDispose).Server;
 
     [Fact]
-    public void ForwardRequest_PreInit_TaskCompletesImmediately()
+    public async Task ForwardRequest_PreInit_TaskCompletesImmediately()
     {
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
@@ -95,7 +95,7 @@ public class RoslynServerProcessTests
         Assert.Equal(0, stdin.Length);
 
         reader.Complete();
-        server.DisposeAsync().AsTask().Wait();
+        await server.DisposeAsync();
     }
 
     [Fact]

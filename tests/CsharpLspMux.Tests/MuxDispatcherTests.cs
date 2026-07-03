@@ -135,8 +135,8 @@ public class MuxDispatcherTests
         Assert.Single(transport.Responses);
         var (id, resp) = transport.Responses[0];
         Assert.Equal(1, id?.GetValue<int>());
-        Assert.NotNull(resp["capabilities"]);
-        Assert.Equal("csharp-lsp-mux", resp["serverInfo"]?["name"]?.GetValue<string>());
+        Assert.NotNull(resp!["capabilities"]);
+        Assert.Equal("csharp-lsp-mux", resp!["serverInfo"]?["name"]?.GetValue<string>());
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class MuxDispatcherTests
 
         await dispatcher.HandleMessageAsync(msg);
 
-        var caps = transport.Responses[0].Result["capabilities"] as JsonObject;
+        var caps = transport.Responses[0].Result!["capabilities"] as JsonObject;
         Assert.NotNull(caps);
         Assert.True(caps["hoverProvider"]?.GetValue<bool>());
         Assert.True(caps["definitionProvider"]?.GetValue<bool>());
@@ -265,7 +265,7 @@ public class MuxDispatcherTests
         Assert.True(result);
         Assert.Single(transport.Responses);
         Assert.IsType<JsonArray>(transport.Responses[0].Result);
-        Assert.Empty((JsonArray)transport.Responses[0].Result);
+        Assert.Empty((JsonArray)transport.Responses[0].Result!);
     }
 
     [Fact]
@@ -302,7 +302,7 @@ public class MuxDispatcherTests
         await dispatcher.HandleMessageAsync(msg);
 
         Assert.Single(transport.Responses);
-        var merged = (JsonArray)transport.Responses[0].Result;
+        var merged = (JsonArray)transport.Responses[0].Result!;
         Assert.Equal(2, merged.Count);
         var names = merged.Select(n => n?["name"]?.GetValue<string>()).ToHashSet();
         Assert.Contains("Alpha", names);

@@ -30,7 +30,7 @@ public class MuxDispatcherLoggingTests
     {
         private readonly IChildServer _server;
         public FakeServerPool(IChildServer server) => _server = server;
-        public event Action<IChildServer>? Evicted;
+        public event Action<IChildServer>? Evicted { add { } remove { } }
         public Task<IChildServer> GetOrAddAsync(string key) => Task.FromResult(_server);
         public IEnumerable<IChildServer> ActiveServers => [_server];
         public Task DisposeAllAsync() => Task.CompletedTask;

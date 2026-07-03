@@ -69,7 +69,7 @@ public class LspFrameReaderTests
         var original = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "$/ping" };
         var frame = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(original));
 
-        await transport.WriteFrameAsync(frame);
+        await transport.WriteFrameAsync(frame, TestContext.Current.CancellationToken);
         pipe.Position = 0;
 
         var reader = new LspFrameReader(pipe);
