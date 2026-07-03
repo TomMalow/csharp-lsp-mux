@@ -19,11 +19,11 @@ public class MuxDispatcherTests
             return Task.CompletedTask;
         }
 
-        public List<(JsonNode? Id, JsonNode Result)> Responses =>
+        public List<(JsonNode? Id, JsonNode? Result)> Responses =>
             WrittenFrames
                 .Select(f => JsonSerializer.Deserialize<JsonObject>(f)!)
                 .Where(f => f.ContainsKey("result"))
-                .Select(f => ((JsonNode?)f["id"]?.DeepClone(), f["result"]!.DeepClone()))
+                .Select(f => ((JsonNode?)f["id"]?.DeepClone(), f["result"]?.DeepClone()))
                 .ToList();
 
         public List<(JsonNode? Id, int Code, string Message)> Errors =>
