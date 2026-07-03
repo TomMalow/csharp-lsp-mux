@@ -858,6 +858,157 @@ public class RoslynServerProcessTests
     }
 
     [Fact]
+    public async Task ForwardRequest_Queued_DebugLogsMethodAndId()
+    {
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
+
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger);
+        await using var _ = server;
+
+        await server.ForwardRequestAsync(MakeFrame(MakeRequest("textDocument/references", 42)));
+
+        var output = logWriter.ToString();
+        Assert.Contains("textDocument/references", output);
+        Assert.Contains("42", output);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ForwardRequest_Queued_InfoLevel_NoDebugLog()
+    {
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Info, logWriter);
+
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger);
+        await using var _ = server;
+
+        await server.ForwardRequestAsync(MakeFrame(MakeRequest("textDocument/references", 42)));
+
+        Assert.Equal("", logWriter.ToString());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ForwardNotification_Queued_DebugLogsMethod()
+    {
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
+
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger);
+        await using var _ = server;
+
+        await server.ForwardNotificationAsync(MakeFrame(MakeNotification("textDocument/didOpen")));
+
+        Assert.Contains("textDocument/didOpen", logWriter.ToString());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task TransitionToReady_DebugLogsDrainCount()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
+
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 100, hardTimeoutMs: 5000);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        await server.ForwardRequestAsync(MakeFrame(MakeRequest("textDocument/references", 1)));
+        await server.ForwardRequestAsync(MakeFrame(MakeRequest("textDocument/hover", 2)));
+
+        await Task.Delay(200, ct); // past grace (100ms)
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+
+        Assert.Contains("draining 2 queued requests", logWriter.ToString());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task GraceTimer_DebugLogsGraceTimeout()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
+
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 50, hardTimeoutMs: 5000);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(200, ct);
+
+        Assert.Contains("workspace ready via grace timeout", logWriter.ToString());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task HardTimeout_DebugLogsHardTimeout()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
+
+        // grace=5000ms (won't fire), hard=60ms
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 5000, hardTimeoutMs: 60);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(200, ct);
+
+        Assert.Contains("workspace ready via hard timeout", logWriter.ToString());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task RelayResponse_DebugLogsId()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
+
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 20, hardTimeoutMs: 200);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(100, ct);
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+
+        await server.ForwardRequestAsync(MakeFrame(MakeRequest("textDocument/references", 99)));
+        reader.Enqueue(MakeResponse("99"));
+        await Task.Delay(50, ct);
+
+        var output = logWriter.ToString();
+        Assert.Contains("relay response id=", output);
+        Assert.Contains("99", output);
+
+        reader.Complete();
+    }
+
+    [Fact]
     public async Task Progress_SwallowedNotForwardedToClient()
     {
         var ct = TestContext.Current.CancellationToken;

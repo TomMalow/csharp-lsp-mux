@@ -139,6 +139,7 @@ public sealed class MuxDispatcher
 
     private async Task EnsureOpenAsync(IChildServer server, string uri, string filePath)
     {
+        _logger?.Debug($"synthetic didOpen {uri}");
         string text;
         try { text = await _readFile(filePath); }
         catch (Exception) { text = ""; }

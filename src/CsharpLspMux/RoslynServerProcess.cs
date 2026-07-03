@@ -158,6 +158,11 @@ public sealed class RoslynServerProcess : IChildServer
         {
             if (_readiness != ServerReadiness.Ready)
             {
+                if (_logger?.IsDebugEnabled == true)
+                {
+                    var (method, id) = ParseFrameLogFields(frame);
+                    _logger.Debug($"queued request {method} id={id}");
+                }
                 _pendingRequests.Add(frame);
                 return Task.CompletedTask;
             }
@@ -171,11 +176,25 @@ public sealed class RoslynServerProcess : IChildServer
         {
             if (_readiness == ServerReadiness.Starting)
             {
+                if (_logger?.IsDebugEnabled == true)
+                {
+                    var (method, _) = ParseFrameLogFields(frame);
+                    _logger.Debug($"queued notification {method}");
+                }
                 _pendingNotifications.Add(frame);
                 return Task.CompletedTask;
             }
         }
         return WriteFrameAsync(frame);
+    }
+
+    private static (string Method, string Id) ParseFrameLogFields(byte[] frame)
+    {
+        var msg = JsonSerializer.Deserialize<JsonObject>(frame);
+        return (
+            msg?["method"]?.GetValue<string>() ?? "?",
+            msg?["id"]?.ToJsonString() ?? "?"
+        );
     }
 
     private async Task ReadLoopAsync()
@@ -205,6 +224,7 @@ public sealed class RoslynServerProcess : IChildServer
                         var elapsed = (long)(System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds);
                         _logger.Info($"server {_solutionPath} initialized in {elapsed}ms");
                     }
+                    _logger?.Debug($"draining {pendingNotifications.Length} queued notifications");
                     foreach (var f in pendingNotifications)
                         await WriteFrameAsync(f);
 
@@ -216,6 +236,7 @@ public sealed class RoslynServerProcess : IChildServer
                         try
                         {
                             await Task.Delay(_graceTimeoutMs, graceCts.Token);
+                            _logger?.Debug("workspace ready via grace timeout");
                             await TransitionToReady();
                         }
                         catch (OperationCanceledException) { }
@@ -236,6 +257,7 @@ public sealed class RoslynServerProcess : IChildServer
                             }
                             if (stillLoading)
                                 _logger?.Info($"workspace load timeout, forwarding {count} queued requests");
+                            _logger?.Debug("workspace ready via hard timeout");
                             await TransitionToReady();
                         }
                         catch (OperationCanceledException) { }
@@ -314,7 +336,11 @@ public sealed class RoslynServerProcess : IChildServer
                 if (message["id"] is not null || method is not null)
                 {
                     if (OnRelayFrame is { } relay)
+                    {
+                        if (_logger?.IsDebugEnabled == true && method is null && message["id"] is JsonNode relayId)
+                            _logger.Debug($"relay response id={relayId.ToJsonString()}");
                         await relay(rawBytes);
+                    }
                     else
                         _logger?.Info($"server {_solutionPath}: no relay subscriber, frame dropped");
                 }
@@ -342,6 +368,7 @@ public sealed class RoslynServerProcess : IChildServer
             var elapsed = (long)System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds;
             _logger.Info($"server {_solutionPath} workspace ready in {elapsed}ms");
         }
+        _logger?.Debug($"draining {pending.Length} queued requests");
         foreach (var f in pending)
             await WriteFrameAsync(f);
     }

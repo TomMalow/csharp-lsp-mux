@@ -122,6 +122,38 @@ public class MuxDispatcherLoggingTests
         Assert.Contains("starting", output);
     }
 
+    [Fact]
+    public async Task EnsureOpenAsync_DebugLogsSyntheticDidOpenUri()
+    {
+        var writer = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Debug, writer);
+        var router = new FakeRouter { RouteResult = "/repo/App.slnx" };
+        var pool = new FakeServerPool(new FakeServer());
+        var dispatcher = new MuxDispatcher(router, pool, new FakeTransport(),
+            readFile: _ => Task.FromResult(""), logger: logger);
+
+        await dispatcher.HandleMessageAsync(TextDocMsg("textDocument/hover", "/repo/src/Foo.cs", id: 1));
+
+        var output = writer.ToString();
+        Assert.Contains("synthetic didOpen", output);
+        Assert.Contains("Foo.cs", output);
+    }
+
+    [Fact]
+    public async Task EnsureOpenAsync_InfoLevel_NoDebugLog()
+    {
+        var writer = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Info, writer);
+        var router = new FakeRouter { RouteResult = "/repo/App.slnx" };
+        var pool = new FakeServerPool(new FakeServer());
+        var dispatcher = new MuxDispatcher(router, pool, new FakeTransport(),
+            readFile: _ => Task.FromResult(""), logger: logger);
+
+        await dispatcher.HandleMessageAsync(TextDocMsg("textDocument/hover", "/repo/src/Foo.cs", id: 1));
+
+        Assert.DoesNotContain("synthetic didOpen", writer.ToString());
+    }
+
     private sealed class NotInitializedFakeServer : IChildServer
     {
         public ServerReadiness Readiness => ServerReadiness.Starting;
