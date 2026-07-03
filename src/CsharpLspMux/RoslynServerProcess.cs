@@ -29,6 +29,8 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly int _graceTimeoutMs;
     private readonly int _hardTimeoutMs;
     private CancellationTokenSource? _graceTimerCts;
+    private readonly HashSet<string> _loadingTokens = new();
+    private bool _seenLoadingToken;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _readerTask;
@@ -254,6 +256,46 @@ public sealed class RoslynServerProcess : IChildServer
                     }
                 }
 
+                if (method == "window/workDoneProgress/create" && message["id"] is JsonNode progressCreateId)
+                {
+                    var response = new JsonObject
+                    {
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = progressCreateId.DeepClone(),
+                        ["result"] = JsonValue.Create<object?>(null)
+                    };
+                    await WriteFrameAsync(SerializeFrame(response));
+                    continue;
+                }
+
+                if (method == "$/progress")
+                {
+                    var token = message["params"]?["token"];
+                    var value = message["params"]?["value"];
+                    var kind = value?["kind"]?.GetValue<string>();
+                    if (token is not null && kind is not null)
+                    {
+                        var tokenKey = token.ToJsonString();
+                        if (kind == "begin")
+                        {
+                            var title = value?["title"]?.GetValue<string>() ?? "";
+                            if (title.Contains("Loading", StringComparison.OrdinalIgnoreCase))
+                            {
+                                _loadingTokens.Add(tokenKey);
+                                _seenLoadingToken = true;
+                                await CancelGraceTimerAsync();
+                            }
+                        }
+                        else if (kind == "end")
+                        {
+                            _loadingTokens.Remove(tokenKey);
+                            if (_loadingTokens.Count == 0 && _seenLoadingToken)
+                                await TransitionToReady();
+                        }
+                    }
+                    continue;
+                }
+
                 // Intercept workspace/configuration requests — respond with empty settings so Roslyn
                 // doesn't stall waiting for a client that can't answer server-initiated requests.
                 if (method == "workspace/configuration" && message["id"] is JsonNode configId)
@@ -389,13 +431,18 @@ public sealed class RoslynServerProcess : IChildServer
         await WriteFrameAsync(SerializeFrame(exit));
     }
 
+    private async Task CancelGraceTimerAsync()
+    {
+        var graceCts = _graceTimerCts;
+        if (graceCts is not null)
+            await graceCts.CancelAsync();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 
-        var graceCts = _graceTimerCts;
-        if (graceCts is not null)
-            await graceCts.CancelAsync();
+        await CancelGraceTimerAsync();
 
         await _cts.CancelAsync();
 
@@ -411,7 +458,7 @@ public sealed class RoslynServerProcess : IChildServer
             await _onDispose();
 
         _cts.Dispose();
-        graceCts?.Dispose();
+        _graceTimerCts?.Dispose();
         _writeLock.Dispose();
     }
 

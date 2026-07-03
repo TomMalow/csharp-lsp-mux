@@ -41,6 +41,17 @@ public class RoslynServerProcessTests
             var bytes = await _channel.Reader.ReadAsync(ct);
             return JsonSerializer.Deserialize<JsonObject>(bytes)!;
         }
+
+        public bool TryReadNext(out JsonObject? frame)
+        {
+            if (_channel.Reader.TryRead(out var bytes))
+            {
+                frame = JsonSerializer.Deserialize<JsonObject>(bytes)!;
+                return true;
+            }
+            frame = null;
+            return false;
+        }
     }
 
     private static byte[] MakeFrame(JsonObject obj)
@@ -626,6 +637,245 @@ public class RoslynServerProcessTests
         var log = logWriter.ToString();
         Assert.Contains("[mux] server /repo/App.slnx workspace ready in", log);
         Assert.Contains("ms", log);
+
+        reader.Complete();
+    }
+
+    // --- Progress tracking helpers ---
+
+    private static JsonObject MakeWorkDoneProgressCreate(int id, string token) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["id"] = id,
+        ["method"] = "window/workDoneProgress/create",
+        ["params"] = new JsonObject { ["token"] = token }
+    };
+
+    private static JsonObject MakeProgressBegin(string token, string title) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["method"] = "$/progress",
+        ["params"] = new JsonObject
+        {
+            ["token"] = token,
+            ["value"] = new JsonObject { ["kind"] = "begin", ["title"] = title }
+        }
+    };
+
+    private static JsonObject MakeProgressEnd(string token) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["method"] = "$/progress",
+        ["params"] = new JsonObject
+        {
+            ["token"] = token,
+            ["value"] = new JsonObject { ["kind"] = "end" }
+        }
+    };
+
+    [Fact]
+    public async Task WorkDoneProgressCreate_InterceptedAndAutoResponded()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 5000, hardTimeoutMs: 10000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        var stdinLengthBefore = stdin.Length;
+        reader.Enqueue(MakeWorkDoneProgressCreate(10, "token1"));
+        await Task.Delay(50, ct);
+
+        // Auto-response written to child server stdin
+        Assert.True(stdin.Length > stdinLengthBefore, "auto-response must be written to child server stdin");
+        var stdinContent = Encoding.UTF8.GetString(stdin.ToArray());
+        Assert.Contains("\"id\":10", stdinContent);
+        Assert.Contains("\"result\":null", stdinContent);
+
+        // Must NOT be relayed to client transport
+        Assert.False(transport.TryReadNext(out JsonObject? unused), "window/workDoneProgress/create must not be forwarded to client");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task Progress_HappyPath_BeginThenEnd_FlushesRequests()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 5000, hardTimeoutMs: 10000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        reader.Enqueue(MakeWorkDoneProgressCreate(10, "token1"));
+        reader.Enqueue(MakeProgressBegin("token1", "Loading workspace..."));
+        await Task.Delay(30, ct);
+
+        // Request queued while still Initialized (grace cancelled, progress active)
+        var frame = MakeFrame(MakeRequest("textDocument/references", 1));
+        await server.ForwardRequestAsync(frame);
+        var stdinBeforeEnd = stdin.Length;
+
+        reader.Enqueue(MakeProgressEnd("token1"));
+        await Task.Delay(50, ct);
+
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+        Assert.True(stdin.Length > stdinBeforeEnd, "queued request must flush after progress end");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task Progress_MultipleTokens_GatedUntilLastEnd()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 5000, hardTimeoutMs: 10000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+
+        reader.Enqueue(MakeWorkDoneProgressCreate(10, "tokenA"));
+        reader.Enqueue(MakeWorkDoneProgressCreate(11, "tokenB"));
+        reader.Enqueue(MakeProgressBegin("tokenA", "Loading solution..."));
+        reader.Enqueue(MakeProgressBegin("tokenB", "Loading projects..."));
+        await Task.Delay(30, ct);
+
+        var frame = MakeFrame(MakeRequest("textDocument/references", 1));
+        await server.ForwardRequestAsync(frame);
+        var stdinBeforeFirstEnd = stdin.Length;
+
+        // First end — still one token active, gate must hold
+        reader.Enqueue(MakeProgressEnd("tokenA"));
+        await Task.Delay(50, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+        Assert.Equal(stdinBeforeFirstEnd, stdin.Length);
+
+        // Second end — all tokens done, gate opens
+        reader.Enqueue(MakeProgressEnd("tokenB"));
+        await Task.Delay(50, ct);
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+        Assert.True(stdin.Length > stdinBeforeFirstEnd, "queued request must flush after last progress end");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task Progress_NonLoadingTitle_GraceTimerStillFires()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        // Short grace so it fires; progress has non-loading title so grace must NOT be cancelled
+        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 60, hardTimeoutMs: 5000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(20, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        reader.Enqueue(MakeProgressBegin("tokenX", "Analyzing code"));
+        await Task.Delay(30, ct);
+        // Still Initialized right after non-loading begin (grace not yet fired)
+
+        await Task.Delay(100, ct); // past grace (60ms)
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task Progress_GraceCancelledWhenLoadingBegins()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        // grace=80ms — would fire if not cancelled; hard=5000ms (won't fire in test)
+        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 80, hardTimeoutMs: 5000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(20, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        // Send loading begin — grace must be cancelled
+        reader.Enqueue(MakeProgressBegin("tokenL", "Loading workspace"));
+        await Task.Delay(20, ct);
+
+        // Wait past grace period — if grace were not cancelled it would have fired
+        await Task.Delay(120, ct);
+
+        // Grace was cancelled, hard not fired; no end sent → still Initialized
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task HardTimeout_WithLoadingProgress_StillFlushes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(enabled: true, logWriter);
+
+        // grace=5000ms (won't fire); hard=80ms (fires as fallback when progress never ends)
+        var (server, stdin) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 5000, hardTimeoutMs: 80);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+
+        // Loading begins — grace is cancelled, hard timeout becomes the only fallback
+        reader.Enqueue(MakeWorkDoneProgressCreate(10, "token1"));
+        reader.Enqueue(MakeProgressBegin("token1", "Loading workspace..."));
+        await Task.Delay(20, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        var frame = MakeFrame(MakeRequest("textDocument/references", 1));
+        await server.ForwardRequestAsync(frame);
+        var stdinBeforeTimeout = stdin.Length;
+
+        // Progress end never arrives — hard timeout must fire
+        await Task.Delay(200, ct); // well past hard timeout (80ms)
+
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+        Assert.True(stdin.Length > stdinBeforeTimeout, "queued request must flush after hard timeout even when loading progress started");
+        Assert.Contains("[mux] workspace load timeout", logWriter.ToString());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task Progress_SwallowedNotForwardedToClient()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 5000, hardTimeoutMs: 10000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+
+        reader.Enqueue(MakeProgressBegin("tokenP", "Loading workspace..."));
+        reader.Enqueue(MakeProgressEnd("tokenP"));
+        await Task.Delay(50, ct);
+
+        // Transport must have received no $/progress frames
+        while (transport.TryReadNext(out var frame))
+            Assert.NotEqual("$/progress", frame?["method"]?.GetValue<string>());
 
         reader.Complete();
     }
