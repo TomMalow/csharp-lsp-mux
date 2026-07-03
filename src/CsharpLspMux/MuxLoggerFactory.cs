@@ -20,7 +20,7 @@ public static class MuxLoggerFactory
         {
             try
             {
-                var fileWriter = new StreamWriter(logFilePath, append: true);
+                var fileWriter = new StreamWriter(logFilePath, append: true) { AutoFlush = true };
                 return (new MuxLogger(enabled: true, fileWriter), fileWriter);
             }
             catch (Exception ex)
