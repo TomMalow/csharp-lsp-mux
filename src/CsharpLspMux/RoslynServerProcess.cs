@@ -136,7 +136,8 @@ public sealed class RoslynServerProcess : IChildServer
                         ["rename"] = new JsonObject { ["dynamicRegistration"] = false },
                         ["codeAction"] = new JsonObject { ["dynamicRegistration"] = false },
                         ["diagnostic"] = new JsonObject { ["dynamicRegistration"] = false }
-                    }
+                    },
+                    ["window"] = new JsonObject { ["workDoneProgress"] = true }
                 },
                 ["initializationOptions"] = new JsonObject
                 {

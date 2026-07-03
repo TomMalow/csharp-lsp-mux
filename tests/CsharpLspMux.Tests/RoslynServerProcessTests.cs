@@ -372,6 +372,26 @@ public class RoslynServerProcessTests
     }
 
     [Fact]
+    public async Task SendInitialize_IncludesWindowWorkDoneProgressCapability()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, solutionPath: "/repo/App.slnx", solutionDir: "/repo");
+        await using var _ = server;
+
+        await Task.Delay(50, ct);
+
+        var raw = Encoding.UTF8.GetString(stdin.ToArray());
+        var headerEnd = raw.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        Assert.True(headerEnd >= 0, "No LSP frame written to server stdin");
+        var initRequest = JsonSerializer.Deserialize<JsonObject>(raw[(headerEnd + 4)..])!;
+        Assert.True(initRequest["params"]?["capabilities"]?["window"]?["workDoneProgress"]?.GetValue<bool>());
+
+        reader.Complete();
+    }
+
+    [Fact]
     public async Task WorkspaceConfiguration_Request_InterceptedAndAnswered()
     {
         var ct = TestContext.Current.CancellationToken;
