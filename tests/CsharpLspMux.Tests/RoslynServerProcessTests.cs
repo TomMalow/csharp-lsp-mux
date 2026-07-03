@@ -72,10 +72,14 @@ public class RoslynServerProcessTests
         ["result"] = new JsonObject { ["capabilities"] = new JsonObject() }
     };
 
-    private static (RoslynServerProcess Server, MemoryStream Stdin) MakeServerWithStdin(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null, MuxLogger? logger = null, string? solutionPath = null, string? solutionDir = null)
+    private static (RoslynServerProcess Server, MemoryStream Stdin) MakeServerWithStdin(
+        FakeFrameReader reader, FakeTransport transport,
+        Func<Task>? onDispose = null, MuxLogger? logger = null,
+        string? solutionPath = null, string? solutionDir = null,
+        int graceTimeoutMs = 20, int hardTimeoutMs = 200)
     {
         var stdin = new MemoryStream();
-        var server = RoslynServerProcess.CreateForTest(stdin, reader, onDispose, logger, solutionPath, solutionDir);
+        var server = RoslynServerProcess.CreateForTest(stdin, reader, onDispose, logger, solutionPath, solutionDir, graceTimeoutMs, hardTimeoutMs);
         server.OnRelayFrame += frame => new ValueTask(transport.WriteFrameAsync(frame));
         return (server, stdin);
     }
@@ -294,7 +298,7 @@ public class RoslynServerProcessTests
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
-        await Task.Delay(50, ct);
+        await Task.Delay(100, ct);
         Assert.Equal(ServerReadiness.Ready, server.Readiness);
 
         var lengthBeforeForward = stdin.Length;
@@ -366,7 +370,7 @@ public class RoslynServerProcessTests
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
-        await Task.Delay(50, ct);
+        await Task.Delay(100, ct);
         Assert.Equal(ServerReadiness.Ready, server.Readiness);
 
         var stdinLengthAfterInit = stdin.Length;
@@ -429,7 +433,7 @@ public class RoslynServerProcessTests
     {
         var ct = TestContext.Current.CancellationToken;
         var reader = new FakeFrameReader();
-        await using var server = RoslynServerProcess.CreateForTest(new MemoryStream(), reader);
+        await using var server = RoslynServerProcess.CreateForTest(new MemoryStream(), reader, graceTimeoutMs: 20);
 
         reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(100, ct);
@@ -488,7 +492,7 @@ public class RoslynServerProcessTests
         await using var _ = server;
 
         reader.Enqueue(MakeInitializeResponse());
-        await Task.Delay(50, ct);
+        await Task.Delay(100, ct);
         Assert.Equal(ServerReadiness.Ready, server.Readiness);
 
         var lengthBefore = stdin.Length;
@@ -496,6 +500,132 @@ public class RoslynServerProcessTests
         await server.ForwardNotificationAsync(frame);
 
         Assert.True(stdin.Length > lengthBefore, "post-init notification forward must write immediately");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ForwardRequest_DuringInitialized_QueuesUntilGraceTimerFires()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        // grace=100ms so we can observe Initialized state before it fires
+        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 100, hardTimeoutMs: 2000);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct); // past init processing, before grace fires
+
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        var lengthAfterInit = stdin.Length;
+        var frame = MakeFrame(MakeRequest("textDocument/references", 1));
+        await server.ForwardRequestAsync(frame);
+        Assert.Equal(lengthAfterInit, stdin.Length); // still queued — grace not fired
+
+        await Task.Delay(150, ct); // past grace timer (100ms)
+
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+        Assert.True(stdin.Length > lengthAfterInit, "request must be flushed after grace timer fires");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task ForwardNotification_DuringInitialized_WritesImmediately()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        // long grace so server stays in Initialized throughout the test
+        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 5000, hardTimeoutMs: 10000);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        var lengthBefore = stdin.Length;
+        var frame = MakeFrame(MakeNotification("textDocument/didOpen"));
+        await server.ForwardNotificationAsync(frame);
+
+        Assert.True(stdin.Length > lengthBefore, "notification must bypass Ready gate and write immediately when Initialized");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task HardTimeout_FlushesWithWarningLog()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(enabled: true, logWriter);
+
+        // grace=5000ms (won't fire), hard=60ms (fires first)
+        var (server, stdin) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 5000, hardTimeoutMs: 60);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(30, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        var frame = MakeFrame(MakeRequest("textDocument/references", 1));
+        await server.ForwardRequestAsync(frame);
+        var lengthBeforeTimeout = stdin.Length;
+
+        await Task.Delay(150, ct); // past hard timeout (60ms)
+
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+        Assert.True(stdin.Length > lengthBeforeTimeout, "request must be flushed after hard timeout");
+
+        var log = logWriter.ToString();
+        Assert.Contains("[mux] workspace load timeout", log);
+        Assert.Contains("queued requests", log);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task TransitionToReady_CalledFromBothTimers_IdempotentNoException()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        // both timers short — they race to call TransitionToReady
+        var (server, stdin) = MakeServerWithStdin(reader, transport, graceTimeoutMs: 20, hardTimeoutMs: 25);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(200, ct); // well past both timers
+
+        // No exception, readiness is Ready exactly once
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task WorkspaceReadyLog_EmittedOnTransitionToReady()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(enabled: true, logWriter);
+
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, solutionPath: "/repo/App.slnx", graceTimeoutMs: 20, hardTimeoutMs: 200);
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(150, ct);
+
+        var log = logWriter.ToString();
+        Assert.Contains("[mux] server /repo/App.slnx workspace ready in", log);
+        Assert.Contains("ms", log);
 
         reader.Complete();
     }

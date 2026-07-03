@@ -9,7 +9,7 @@ public interface IChildServer : IAsyncDisposable
     /// Subscribers wire this to the client transport at the composition root.
     /// </summary>
     event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame;
-    /// <summary>Forwards a request (has an id) to the child server. Gates on <see cref="ServerReadiness.Initialized"/>.</summary>
+    /// <summary>Forwards a request (has an id) to the child server. Gates on <see cref="ServerReadiness.Ready"/>.</summary>
     Task ForwardRequestAsync(byte[] frame);
     /// <summary>Forwards a notification (no id) to the child server. Gates on <see cref="ServerReadiness.Initialized"/>.</summary>
     Task ForwardNotificationAsync(byte[] frame);

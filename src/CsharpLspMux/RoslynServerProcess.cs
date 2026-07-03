@@ -8,7 +8,7 @@ namespace CsharpLspMux;
 
 /// <summary>
 /// Wraps a single roslyn-language-server child process.
-/// Queues outbound requests until the server signals <c>initialized</c>, then flushes.
+/// Queues outbound notifications until <c>Initialized</c>, then queues requests until <c>Ready</c>.
 /// </summary>
 public sealed class RoslynServerProcess : IChildServer
 {
@@ -22,8 +22,13 @@ public sealed class RoslynServerProcess : IChildServer
 
     private readonly object _initLock = new();
     private ServerReadiness _readiness = ServerReadiness.Starting;
-    private readonly List<byte[]> _pendingQueue = new();
+    private readonly List<byte[]> _pendingNotifications = new();
+    private readonly List<byte[]> _pendingRequests = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+
+    private readonly int _graceTimeoutMs;
+    private readonly int _hardTimeoutMs;
+    private CancellationTokenSource? _graceTimerCts;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _readerTask;
@@ -35,14 +40,23 @@ public sealed class RoslynServerProcess : IChildServer
 
     public ServerReadiness Readiness { get { lock (_initLock) return _readiness; } }
 
-    private RoslynServerProcess(Stream stdin, IFrameReader reader, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null)
+    private RoslynServerProcess(Stream stdin, IFrameReader reader, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null, int graceTimeoutMs = 2000, int hardTimeoutMs = -1)
     {
         _stdin = stdin;
         _reader = reader;
         _onDispose = onDispose;
         _logger = logger;
         _solutionPath = solutionPath;
+        _graceTimeoutMs = graceTimeoutMs;
+        _hardTimeoutMs = hardTimeoutMs > 0 ? hardTimeoutMs : ReadHardTimeoutMs();
         _readerTask = Task.Run(ReadLoopAsync);
+    }
+
+    private static int ReadHardTimeoutMs()
+    {
+        if (int.TryParse(Environment.GetEnvironmentVariable("LSP_MUX_LOAD_TIMEOUT_MS"), out var ms) && ms > 0)
+            return ms;
+        return 10000;
     }
 
     internal static RoslynServerProcess CreateForTest(
@@ -51,9 +65,11 @@ public sealed class RoslynServerProcess : IChildServer
         Func<Task>? onDispose = null,
         MuxLogger? logger = null,
         string? solutionPath = null,
-        string? solutionDir = null)
+        string? solutionDir = null,
+        int graceTimeoutMs = 2000,
+        int hardTimeoutMs = 10000)
     {
-        var server = new RoslynServerProcess(stdin, reader, onDispose, logger, solutionPath);
+        var server = new RoslynServerProcess(stdin, reader, onDispose, logger, solutionPath, graceTimeoutMs, hardTimeoutMs);
         if (solutionPath != null && solutionDir != null)
             server.SendInitialize(solutionPath, solutionDir);
         return server;
@@ -134,17 +150,26 @@ public sealed class RoslynServerProcess : IChildServer
         _ = WriteFrameAsync(SerializeFrame(initRequest));
     }
 
-    public Task ForwardRequestAsync(byte[] frame) => ForwardFrameAsync(frame);
+    public Task ForwardRequestAsync(byte[] frame)
+    {
+        lock (_initLock)
+        {
+            if (_readiness != ServerReadiness.Ready)
+            {
+                _pendingRequests.Add(frame);
+                return Task.CompletedTask;
+            }
+        }
+        return WriteFrameAsync(frame);
+    }
 
-    public Task ForwardNotificationAsync(byte[] frame) => ForwardFrameAsync(frame);
-
-    private Task ForwardFrameAsync(byte[] frame)
+    public Task ForwardNotificationAsync(byte[] frame)
     {
         lock (_initLock)
         {
             if (_readiness == ServerReadiness.Starting)
             {
-                _pendingQueue.Add(frame);
+                _pendingNotifications.Add(frame);
                 return Task.CompletedTask;
             }
         }
@@ -166,22 +191,54 @@ public sealed class RoslynServerProcess : IChildServer
                 {
                     var initialized = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "initialized", ["params"] = new JsonObject() };
                     await WriteFrameAsync(SerializeFrame(initialized));
-                    byte[][] pending;
+                    byte[][] pendingNotifications;
                     lock (_initLock)
                     {
                         _readiness = ServerReadiness.Initialized;
-                        pending = _pendingQueue.ToArray();
-                        _pendingQueue.Clear();
+                        pendingNotifications = _pendingNotifications.ToArray();
+                        _pendingNotifications.Clear();
                     }
                     if (_logger?.IsEnabled == true)
                     {
                         var elapsed = (long)(System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds);
                         _logger.Log($"[mux] server {_solutionPath} initialized in {elapsed}ms");
                     }
-                    foreach (var f in pending)
+                    foreach (var f in pendingNotifications)
                         await WriteFrameAsync(f);
-                    // In this slice: immediately promote to Ready — no progress gate yet (#47 adds it).
-                    lock (_initLock) { _readiness = ServerReadiness.Ready; }
+
+                    // Grace timer: if no progress tokens arrive within grace period, assume workspace is ready.
+                    var graceCts = new CancellationTokenSource();
+                    _graceTimerCts = graceCts;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Task.Delay(_graceTimeoutMs, graceCts.Token);
+                            await TransitionToReady();
+                        }
+                        catch (OperationCanceledException) { }
+                    });
+
+                    // Hard timeout: unconditional safety net, logs a warning only if still loading.
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Task.Delay(_hardTimeoutMs, _cts.Token);
+                            int count;
+                            bool stillLoading;
+                            lock (_initLock)
+                            {
+                                stillLoading = _readiness == ServerReadiness.Initialized;
+                                count = _pendingRequests.Count;
+                            }
+                            if (stillLoading)
+                                _logger?.Log($"[mux] workspace load timeout, forwarding {count} queued requests");
+                            await TransitionToReady();
+                        }
+                        catch (OperationCanceledException) { }
+                    });
+
                     continue;
                 }
 
@@ -226,6 +283,25 @@ public sealed class RoslynServerProcess : IChildServer
         {
             Console.Error.WriteLine($"[RoslynServerProcess] reader error: {ex.Message}");
         }
+    }
+
+    private async Task TransitionToReady()
+    {
+        byte[][] pending;
+        lock (_initLock)
+        {
+            if (_readiness != ServerReadiness.Initialized) return;
+            _readiness = ServerReadiness.Ready;
+            pending = _pendingRequests.ToArray();
+            _pendingRequests.Clear();
+        }
+        if (_logger?.IsEnabled == true)
+        {
+            var elapsed = (long)System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds;
+            _logger.Log($"[mux] server {_solutionPath} workspace ready in {elapsed}ms");
+        }
+        foreach (var f in pending)
+            await WriteFrameAsync(f);
     }
 
     private async Task WriteFrameAsync(byte[] frame)
@@ -317,16 +393,25 @@ public sealed class RoslynServerProcess : IChildServer
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 
+        var graceCts = _graceTimerCts;
+        if (graceCts is not null)
+            await graceCts.CancelAsync();
+
         await _cts.CancelAsync();
 
         try { await _readerTask; } catch { }
 
-        lock (_initLock) { _pendingQueue.Clear(); }
+        lock (_initLock)
+        {
+            _pendingNotifications.Clear();
+            _pendingRequests.Clear();
+        }
 
         if (_onDispose is not null)
             await _onDispose();
 
         _cts.Dispose();
+        graceCts?.Dispose();
         _writeLock.Dispose();
     }
 
