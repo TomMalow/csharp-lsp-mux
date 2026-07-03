@@ -563,6 +563,39 @@ public class MuxDispatcherTests
     }
 
     [Fact]
+    public async Task WorkspaceDidChangeConfiguration_ForwardsToAllActiveServers()
+    {
+        var sln1 = "/repo/A.slnx";
+        var sln2 = "/repo/B.slnx";
+        var transport = new FakeTransport();
+        var router = new FakeRouter();
+        var serverA = new FakeServer();
+        var serverB = new FakeServer();
+        var pool = new ServerPool<IChildServer>(10, key =>
+            Task.FromResult<IChildServer>(key == sln1 ? serverA : serverB));
+        var dispatcher = new MuxDispatcher(router, pool, transport);
+
+        await pool.GetOrAddAsync(sln1);
+        await pool.GetOrAddAsync(sln2);
+
+        var msg = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "workspace/didChangeConfiguration",
+            ["params"] = new JsonObject()
+        };
+
+        var result = await dispatcher.HandleMessageAsync(msg);
+
+        Assert.True(result);
+        Assert.Empty(transport.Responses);
+        Assert.Single(serverA.ForwardedFrames);
+        Assert.Single(serverB.ForwardedFrames);
+        var forwarded = JsonSerializer.Deserialize<JsonObject>(serverA.ForwardedFrames[0])!;
+        Assert.Equal("workspace/didChangeConfiguration", forwarded["method"]?.GetValue<string>());
+    }
+
+    [Fact]
     public async Task NotifyEviction_RemovesEvictedServerEntries()
     {
         var sln = "/repo/App.slnx";

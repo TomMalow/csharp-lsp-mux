@@ -39,6 +39,7 @@ public sealed class MuxDispatcher
             "initialized" => Task.FromResult(true),
             "$/cancelRequest" => HandleCancelRequest(message),
             "workspace/symbol" => HandleWorkspaceSymbol(message),
+            "workspace/didChangeConfiguration" => HandleDidChangeConfiguration(message),
             "workspace/didChangeWatchedFiles" => HandleDidChangeWatchedFiles(message),
             "shutdown" => HandleShutdown(message),
             "exit" => HandleExit(message),
@@ -220,6 +221,14 @@ public sealed class MuxDispatcher
             if (requestId is not null)
                 await _transport.SendResponseAsync(requestId, merged);
         }
+        return true;
+    }
+
+    private async Task<bool> HandleDidChangeConfiguration(JsonObject message)
+    {
+        var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+        foreach (var server in _pool.ActiveServers.ToList())
+            await server.ForwardRequestAsync(raw);
         return true;
     }
 
