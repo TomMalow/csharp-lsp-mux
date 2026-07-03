@@ -101,10 +101,10 @@ public sealed class MuxDispatcher
             {
                 var server = await _pool.GetOrAddAsync(solutionPath);
 
-                if (_logger?.IsEnabled == true)
+                if (_logger?.IsInfoEnabled == true)
                 {
                     var state = server.Readiness.ToString().ToLowerInvariant();
-                    _logger.Log($"[mux] route {method} → {solutionPath} (server: {state})");
+                    _logger.Info($"route {method} → {solutionPath} (server: {state})");
                 }
 
                 var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
@@ -129,7 +129,7 @@ public sealed class MuxDispatcher
             }
             else
             {
-                _logger?.Log($"[mux] SolutionRouter: no solution found for {filePath}");
+                _logger?.Info($"SolutionRouter: no solution found for {filePath}");
                 if (message["id"] is JsonNode requestId)
                     await _transport.SendErrorAsync(requestId, -32001, $"No solution found for file: {filePath}");
             }

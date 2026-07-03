@@ -74,6 +74,6 @@ public sealed class ServerPool<TServer> : IServerPool<TServer> where TServer : I
         try { await oldest.Value.Server.DisposeAsync(); } catch { }
         if (OnEviction is { } handler)
             try { await handler(oldest.Value.Server); }
-            catch (Exception ex) { _logger?.Log($"[pool] OnEviction handler threw: {ex.Message}"); }
+            catch (Exception ex) { _logger?.Info($"OnEviction handler threw: {ex.Message}"); }
     }
 }

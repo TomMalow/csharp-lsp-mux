@@ -194,7 +194,7 @@ public sealed class ServerPoolTests
     public async Task OnEviction_HandlerThrows_LogsError()
     {
         var logOutput = new StringWriter();
-        var logger = new MuxLogger(enabled: true, logOutput);
+        var logger = new MuxLogger(LogLevel.Debug, logOutput);
         var pool = new ServerPool<FakeServer>(cap: 2, factory: _ => Task.FromResult(new FakeServer()), logger: logger);
         pool.OnEviction = _ => throw new InvalidOperationException("boom");
 

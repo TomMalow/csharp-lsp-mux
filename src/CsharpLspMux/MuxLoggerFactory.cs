@@ -14,24 +14,24 @@ public static class MuxLoggerFactory
         TextWriter stderr)
     {
         if (debugFlagEnabled)
-            return (new MuxLogger(enabled: true, stderr), null);
+            return (new MuxLogger(LogLevel.Debug, stderr), null);
 
         if (logFilePath is not null)
         {
             try
             {
                 var fileWriter = new StreamWriter(logFilePath, append: true) { AutoFlush = true };
-                return (new MuxLogger(enabled: true, fileWriter), fileWriter);
+                return (new MuxLogger(LogLevel.Debug, fileWriter), fileWriter);
             }
             catch (Exception ex)
             {
                 stderr.WriteLine($"[mux] warning: cannot open log file '{logFilePath}': {ex.Message} — falling back to stderr");
-                return (new MuxLogger(enabled: true, stderr), null);
+                return (new MuxLogger(LogLevel.Debug, stderr), null);
             }
         }
 
         if (debugEnvEnabled)
-            return (new MuxLogger(enabled: true, stderr), null);
+            return (new MuxLogger(LogLevel.Debug, stderr), null);
 
         return (null, null);
     }

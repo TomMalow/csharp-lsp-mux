@@ -200,10 +200,10 @@ public sealed class RoslynServerProcess : IChildServer
                         pendingNotifications = _pendingNotifications.ToArray();
                         _pendingNotifications.Clear();
                     }
-                    if (_logger?.IsEnabled == true)
+                    if (_logger?.IsInfoEnabled == true)
                     {
                         var elapsed = (long)(System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds);
-                        _logger.Log($"[mux] server {_solutionPath} initialized in {elapsed}ms");
+                        _logger.Info($"server {_solutionPath} initialized in {elapsed}ms");
                     }
                     foreach (var f in pendingNotifications)
                         await WriteFrameAsync(f);
@@ -235,7 +235,7 @@ public sealed class RoslynServerProcess : IChildServer
                                 count = _pendingRequests.Count;
                             }
                             if (stillLoading)
-                                _logger?.Log($"[mux] workspace load timeout, forwarding {count} queued requests");
+                                _logger?.Info($"workspace load timeout, forwarding {count} queued requests");
                             await TransitionToReady();
                         }
                         catch (OperationCanceledException) { }
@@ -316,7 +316,7 @@ public sealed class RoslynServerProcess : IChildServer
                     if (OnRelayFrame is { } relay)
                         await relay(rawBytes);
                     else
-                        _logger?.Log($"[mux] server {_solutionPath}: no relay subscriber, frame dropped");
+                        _logger?.Info($"server {_solutionPath}: no relay subscriber, frame dropped");
                 }
             }
         }
@@ -337,10 +337,10 @@ public sealed class RoslynServerProcess : IChildServer
             pending = _pendingRequests.ToArray();
             _pendingRequests.Clear();
         }
-        if (_logger?.IsEnabled == true)
+        if (_logger?.IsInfoEnabled == true)
         {
             var elapsed = (long)System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds;
-            _logger.Log($"[mux] server {_solutionPath} workspace ready in {elapsed}ms");
+            _logger.Info($"server {_solutionPath} workspace ready in {elapsed}ms");
         }
         foreach (var f in pending)
             await WriteFrameAsync(f);
@@ -370,13 +370,13 @@ public sealed class RoslynServerProcess : IChildServer
             while (!_cts.Token.IsCancellationRequested
                    && (line = await stderr.ReadLineAsync(_cts.Token)) is not null)
             {
-                _logger?.Log($"[mux] server {_solutionPath} stderr: {line}");
+                _logger?.Info($"server {_solutionPath} stderr: {line}");
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            _logger?.Log($"[mux] server {_solutionPath} stderr reader error: {ex.Message}");
+            _logger?.Info($"server {_solutionPath} stderr reader error: {ex.Message}");
         }
     }
 

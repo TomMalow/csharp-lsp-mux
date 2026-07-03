@@ -59,7 +59,7 @@ public class MuxDispatcherLoggingTests
     public async Task LoggerDisabled_NoOutput_WhenNoSolutionFound()
     {
         var writer = new StringWriter();
-        var logger = new MuxLogger(enabled: false, writer);
+        var logger = new MuxLogger(LogLevel.Off, writer);
         var router = new FakeRouter { RouteResult = null };
         var pool = new FakeServerPool(new FakeServer());
         var dispatcher = new MuxDispatcher(router, pool, new FakeTransport(), logger: logger);
@@ -73,7 +73,7 @@ public class MuxDispatcherLoggingTests
     public async Task LoggerEnabled_LogsNoSolutionFound_WhenRouterReturnsNull()
     {
         var writer = new StringWriter();
-        var logger = new MuxLogger(enabled: true, writer);
+        var logger = new MuxLogger(LogLevel.Debug, writer);
         var router = new FakeRouter { RouteResult = null };
         var pool = new FakeServerPool(new FakeServer());
         var dispatcher = new MuxDispatcher(router, pool, new FakeTransport(), logger: logger);
@@ -89,7 +89,7 @@ public class MuxDispatcherLoggingTests
     public async Task LoggerEnabled_LogsRouteWithInitialized_WhenServerIsInitialized()
     {
         var writer = new StringWriter();
-        var logger = new MuxLogger(enabled: true, writer);
+        var logger = new MuxLogger(LogLevel.Debug, writer);
         var router = new FakeRouter { RouteResult = "/repo/App.slnx" };
         var server = new FakeServer();
         var pool = new FakeServerPool(server);
@@ -108,7 +108,7 @@ public class MuxDispatcherLoggingTests
     public async Task LoggerEnabled_LogsRouteWithQueued_WhenServerNotYetInitialized()
     {
         var writer = new StringWriter();
-        var logger = new MuxLogger(enabled: true, writer);
+        var logger = new MuxLogger(LogLevel.Debug, writer);
         var router = new FakeRouter { RouteResult = "/repo/App.slnx" };
         var server = new NotInitializedFakeServer();
         var pool = new FakeServerPool(server);

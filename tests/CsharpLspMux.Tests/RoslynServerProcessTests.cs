@@ -413,7 +413,7 @@ public class RoslynServerProcessTests
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
         var logWriter = new StringWriter();
-        var logger = new MuxLogger(enabled: true, logWriter);
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
 
         var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, solutionPath: "/repo/App.slnx");
         await using var _ = server;
@@ -574,7 +574,7 @@ public class RoslynServerProcessTests
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
         var logWriter = new StringWriter();
-        var logger = new MuxLogger(enabled: true, logWriter);
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
 
         // grace=5000ms (won't fire), hard=60ms (fires first)
         var (server, stdin) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 5000, hardTimeoutMs: 60);
@@ -626,7 +626,7 @@ public class RoslynServerProcessTests
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
         var logWriter = new StringWriter();
-        var logger = new MuxLogger(enabled: true, logWriter);
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
 
         var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, solutionPath: "/repo/App.slnx", graceTimeoutMs: 20, hardTimeoutMs: 200);
         await using var _ = server;
@@ -828,7 +828,7 @@ public class RoslynServerProcessTests
         var reader = new FakeFrameReader();
         var transport = new FakeTransport();
         var logWriter = new StringWriter();
-        var logger = new MuxLogger(enabled: true, logWriter);
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
 
         // grace=5000ms (won't fire); hard=80ms (fires as fallback when progress never ends)
         var (server, stdin) = MakeServerWithStdin(reader, transport, logger: logger, graceTimeoutMs: 5000, hardTimeoutMs: 80);

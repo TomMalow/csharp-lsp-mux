@@ -13,9 +13,9 @@ public class MuxLoggerFactoryTests
             logFilePath: null, debugFlagEnabled: true, debugEnvEnabled: false, stderr);
 
         Assert.NotNull(logger);
-        Assert.True(logger!.IsEnabled);
+        Assert.True(logger!.IsInfoEnabled);
         Assert.Null(fileWriter);
-        logger.Log("flag-test");
+        logger.Info("flag-test");
         Assert.Contains("flag-test", stderr.ToString());
     }
 
@@ -32,9 +32,9 @@ public class MuxLoggerFactoryTests
             using (fileWriter)
             {
                 Assert.NotNull(logger);
-                Assert.True(logger!.IsEnabled);
+                Assert.True(logger!.IsInfoEnabled);
                 Assert.NotNull(fileWriter);
-                logger.Log("file-test");
+                logger.Info("file-test");
             }
 
             var content = File.ReadAllText(tempFile);
@@ -54,9 +54,9 @@ public class MuxLoggerFactoryTests
             logFilePath: badPath, debugFlagEnabled: false, debugEnvEnabled: false, stderr);
 
         Assert.NotNull(logger);
-        Assert.True(logger!.IsEnabled);
+        Assert.True(logger!.IsInfoEnabled);
         Assert.Null(fileWriter);
-        logger.Log("stderr-fallback");
+        logger.Info("stderr-fallback");
         var stderrText = stderr.ToString();
         Assert.Contains("stderr-fallback", stderrText);
         Assert.Contains("warning", stderrText, StringComparison.OrdinalIgnoreCase);
@@ -71,9 +71,9 @@ public class MuxLoggerFactoryTests
             logFilePath: null, debugFlagEnabled: false, debugEnvEnabled: true, stderr);
 
         Assert.NotNull(logger);
-        Assert.True(logger!.IsEnabled);
+        Assert.True(logger!.IsInfoEnabled);
         Assert.Null(fileWriter);
-        logger.Log("env-test");
+        logger.Info("env-test");
         Assert.Contains("env-test", stderr.ToString());
     }
 
@@ -101,7 +101,7 @@ public class MuxLoggerFactoryTests
 
             Assert.NotNull(logger);
             Assert.Null(fileWriter);
-            logger!.Log("flag-wins");
+            logger!.Info("flag-wins");
             Assert.Contains("flag-wins", stderr.ToString());
             // file should be empty (flag ignores LSP_MUX_LOG_FILE)
             Assert.Equal(0, new FileInfo(tempFile).Length);
