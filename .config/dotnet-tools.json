@@ -2,8 +2,8 @@
   "version": 1,
   "isRoot": true,
   "tools": {
-    "microsoft.codeanalysis.languageserver": {
-      "version": "4.14.0-2.25375.6",
+    "roslyn-language-server": {
+      "version": "5.9.0-1.26303.1",
       "commands": [
         "roslyn-language-server"
       ],
