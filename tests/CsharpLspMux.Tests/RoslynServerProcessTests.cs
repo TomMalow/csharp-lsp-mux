@@ -70,10 +70,10 @@ public class RoslynServerProcessTests
         ["result"] = new JsonObject { ["capabilities"] = new JsonObject() }
     };
 
-    private static (RoslynServerProcess Server, MemoryStream Stdin) MakeServerWithStdin(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null, MuxLogger? logger = null, string? solutionPath = null)
+    private static (RoslynServerProcess Server, MemoryStream Stdin) MakeServerWithStdin(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null, MuxLogger? logger = null, string? solutionPath = null, string? solutionDir = null)
     {
         var stdin = new MemoryStream();
-        return (RoslynServerProcess.CreateForTest(stdin, reader, transport, onDispose, logger, solutionPath), stdin);
+        return (RoslynServerProcess.CreateForTest(stdin, reader, transport, onDispose, logger, solutionPath, solutionDir), stdin);
     }
 
     private static RoslynServerProcess MakeServer(FakeFrameReader reader, FakeTransport transport, Func<Task>? onDispose = null)
@@ -307,6 +307,26 @@ public class RoslynServerProcessTests
 
             reader.Complete();
         }
+    }
+
+    [Fact]
+    public async Task SendInitialize_IncludesWorkspaceSymbolCapability()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, solutionPath: "/repo/App.slnx", solutionDir: "/repo");
+        await using var _ = server;
+
+        await Task.Delay(50, ct);
+
+        var raw = Encoding.UTF8.GetString(stdin.ToArray());
+        var headerEnd = raw.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        Assert.True(headerEnd >= 0, "No LSP frame written to server stdin");
+        var initRequest = JsonSerializer.Deserialize<JsonObject>(raw[(headerEnd + 4)..])!;
+        Assert.NotNull(initRequest["params"]?["capabilities"]?["workspace"]?["symbol"]);
+
+        reader.Complete();
     }
 
     [Fact]
