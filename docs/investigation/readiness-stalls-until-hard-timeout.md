@@ -1,6 +1,11 @@
 # Investigation: requests stall until the 30s hard timeout instead of finalizing on readiness
 
-**Status:** Root cause identified (one link confirmed by inference, not yet by live trace)
+**Status:** Resolved and confirmed live — fix shipped in `8091ef8` (#55), captured as
+[ADR-0007](../adr/0007-solution-open-triggers-workspace-load.md). The last inferred link (that this
+binary emits `projectInitializationComplete` in response to `solution/open`) has now been confirmed
+by a live capture: the child Roslyn server was launched with `--logLevel Debug --extensionLogDirectory`
+and observed loading the solution and reaching readiness on the real signal, with the hard-timeout
+fallback no longer firing.
 **Date:** 2026-07-06
 **Area:** `RoslynServerProcess` readiness handshake
 
@@ -57,6 +62,9 @@ half of the readiness handshake. The **sending** half — telling Roslyn to open
 never wired. The receiver is waiting for a signal that can never arrive.
 
 ## The fix
+
+> **Shipped** in `8091ef8` (#55) and recorded as
+> [ADR-0007: `solution/open` triggers Roslyn workspace load](../adr/0007-solution-open-triggers-workspace-load.md).
 
 After the mux sends `initialized` to the child
 (`src/CsharpLspMux/RoslynServerProcess.cs:208-227`, immediately before the hard timeout is
