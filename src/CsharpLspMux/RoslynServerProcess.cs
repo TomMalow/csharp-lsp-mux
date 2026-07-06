@@ -138,10 +138,6 @@ public sealed class RoslynServerProcess : IChildServer
                         ["diagnostic"] = new JsonObject { ["dynamicRegistration"] = false }
                     },
                     ["window"] = new JsonObject { ["workDoneProgress"] = true }
-                },
-                ["initializationOptions"] = new JsonObject
-                {
-                    ["solutionPath"] = solutionPath
                 }
             }
         };
@@ -224,6 +220,20 @@ public sealed class RoslynServerProcess : IChildServer
                     _logger?.Debug($"draining {pendingNotifications.Length} queued notifications");
                     foreach (var f in pendingNotifications)
                         await WriteFrameAsync(f);
+
+                    if (_solutionPath is not null)
+                    {
+                        var solutionOpen = new JsonObject
+                        {
+                            ["jsonrpc"] = "2.0",
+                            ["method"] = "solution/open",
+                            ["params"] = new JsonObject
+                            {
+                                ["solution"] = new Uri(_solutionPath).AbsoluteUri
+                            }
+                        };
+                        await WriteFrameAsync(SerializeFrame(solutionOpen));
+                    }
 
                     // Hard timeout: unconditional safety net for servers that never emit progress tokens.
                     _ = Task.Run(async () =>

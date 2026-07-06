@@ -57,6 +57,30 @@ public class RoslynServerProcessTests
     private static byte[] MakeFrame(JsonObject obj)
         => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(obj));
 
+    /// <summary>
+    /// Parses all sequential Content-Length-framed JSON messages out of a raw byte buffer,
+    /// in the order they were written.
+    /// </summary>
+    private static List<JsonObject> ParseFrames(byte[] raw)
+    {
+        var frames = new List<JsonObject>();
+        var text = Encoding.UTF8.GetString(raw);
+        var offset = 0;
+        while (offset < text.Length)
+        {
+            var headerEnd = text.IndexOf("\r\n\r\n", offset, StringComparison.Ordinal);
+            if (headerEnd < 0) break;
+            var header = text[offset..headerEnd];
+            var lengthLine = header.Split("\r\n").First(l => l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
+            var length = int.Parse(lengthLine.Split(':')[1].Trim());
+            var bodyStart = headerEnd + 4;
+            var body = text.Substring(bodyStart, length);
+            frames.Add(JsonSerializer.Deserialize<JsonObject>(body)!);
+            offset = bodyStart + length;
+        }
+        return frames;
+    }
+
     private static JsonObject MakeNotification(string method) => new()
     {
         ["jsonrpc"] = "2.0",
@@ -1147,6 +1171,116 @@ public class RoslynServerProcessTests
         await Task.Delay(50, ct);
 
         Assert.Equal(ServerReadiness.Ready, server.Readiness);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task InitializeResponse_SendsSolutionOpenWithFileUri()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, solutionPath: "/repo/App.slnx", solutionDir: "/repo");
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(50, ct);
+
+        var frames = ParseFrames(stdin.ToArray());
+        var solutionOpen = frames.SingleOrDefault(f => f["method"]?.GetValue<string>() == "solution/open");
+        Assert.NotNull(solutionOpen);
+        Assert.Equal(new Uri("/repo/App.slnx").AbsoluteUri, solutionOpen!["params"]?["solution"]?.GetValue<string>());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task InitializeResponse_SolutionOpenSentAfterInitialized()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, solutionPath: "/repo/App.slnx", solutionDir: "/repo");
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(50, ct);
+
+        var frames = ParseFrames(stdin.ToArray());
+        var initializedIndex = frames.FindIndex(f => f["method"]?.GetValue<string>() == "initialized");
+        var solutionOpenIndex = frames.FindIndex(f => f["method"]?.GetValue<string>() == "solution/open");
+
+        Assert.True(initializedIndex >= 0, "initialized notification must be sent");
+        Assert.True(solutionOpenIndex >= 0, "solution/open notification must be sent");
+        Assert.True(solutionOpenIndex > initializedIndex, "solution/open must be sent after initialized");
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task SolutionOpen_NotRelayedToClient()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, solutionPath: "/repo/App.slnx", solutionDir: "/repo");
+        await using var _ = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(50, ct);
+
+        while (transport.TryReadNext(out var frame))
+            Assert.NotEqual("solution/open", frame?["method"]?.GetValue<string>());
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task SolutionOpen_ThenProjectInitializationComplete_ReachesReadyAndDrains()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, solutionPath: "/repo/App.slnx", solutionDir: "/repo", hardTimeoutMs: 10000);
+        await using var s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(50, ct);
+        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
+
+        var frames = ParseFrames(stdin.ToArray());
+        Assert.Contains(frames, f => f["method"]?.GetValue<string>() == "solution/open");
+
+        var frame = MakeFrame(MakeRequest("textDocument/references", 1));
+        await server.ForwardRequestAsync(frame);
+
+        reader.Enqueue(MakeNotification("workspace/projectInitializationComplete"));
+        await Task.Delay(50, ct);
+
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+        var written = Encoding.UTF8.GetString(stdin.ToArray());
+        Assert.Contains("textDocument/references", written, StringComparison.Ordinal);
+
+        reader.Complete();
+    }
+
+    [Fact]
+    public async Task SendInitialize_DoesNotIncludeSolutionPathInitializationOption()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var (server, stdin) = MakeServerWithStdin(reader, transport, solutionPath: "/repo/App.slnx", solutionDir: "/repo");
+        await using var _ = server;
+
+        await Task.Delay(50, ct);
+
+        var raw = Encoding.UTF8.GetString(stdin.ToArray());
+        var headerEnd = raw.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        Assert.True(headerEnd >= 0, "No LSP frame written to server stdin");
+        var initRequest = JsonSerializer.Deserialize<JsonObject>(raw[(headerEnd + 4)..])!;
+        Assert.Null(initRequest["params"]?["initializationOptions"]?["solutionPath"]);
 
         reader.Complete();
     }

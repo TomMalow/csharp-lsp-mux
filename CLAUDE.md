@@ -39,7 +39,7 @@ Bounded set of `roslyn-language-server` child processes. Keyed by solution path.
 
 Each server initialized with:
 - `rootUri` = solution's directory
-- `initializationOptions.solutionPath` = absolute `.sln`/`.slnx` path
+- After the `initialize`/`initialized` handshake, mux sends a `solution/open` notification (`params.solution` = `file://` URI of the routed `.sln`/`.slnx`) so Roslyn actually loads the workspace and emits `workspace/projectInitializationComplete`
 
 ## Request dispatch
 
