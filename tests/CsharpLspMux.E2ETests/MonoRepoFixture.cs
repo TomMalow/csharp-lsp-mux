@@ -12,6 +12,13 @@ internal sealed class MonoRepoFixture : IDisposable
 
     public string TempDir { get; } = Path.Combine(Path.GetTempPath(), $"csharp-lsp-mux-e2e-{Guid.NewGuid():N}");
 
+    /// <summary>
+    /// Reads a fixture file's on-disk text so tests send didOpen content that can never drift
+    /// from the fixture (one source of truth instead of a duplicated inline literal).
+    /// </summary>
+    public string ReadFile(params string[] relativeSegments) =>
+        File.ReadAllText(Path.Combine([TempDir, .. relativeSegments]));
+
     public MonoRepoFixture()
     {
         if (!Directory.Exists(FixtureSource))

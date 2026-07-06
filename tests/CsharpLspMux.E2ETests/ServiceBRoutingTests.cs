@@ -6,6 +6,13 @@ namespace CsharpLspMux.E2ETests;
 
 public sealed class ServiceBRoutingTests : IDisposable
 {
+    private static readonly string[] ServiceAClassFilePath = ["src", "ServiceA", "ServiceA.Api", "Class1.cs"];
+    private static readonly string[] ServiceBClassFilePath = ["src", "ServiceB", "ServiceB.Worker", "Class1.cs"];
+
+    // ServiceAClient / ServiceBWorker class declarations
+    private const int ClassDeclarationLine = 2;
+    private const int ClassDeclarationChar = 13;
+
     private readonly MonoRepoFixture _fixture;
 
     public ServiceBRoutingTests()
@@ -58,14 +65,14 @@ public sealed class ServiceBRoutingTests : IDisposable
                     ["uri"] = fileUri,
                     ["languageId"] = "csharp",
                     ["version"] = 1,
-                    ["text"] = "namespace ServiceB.Worker;\n\npublic class ServiceBWorker\n{\n}\n"
+                    ["text"] = _fixture.ReadFile(ServiceBClassFilePath)
                 }
             }, ct);
 
             var hoverResponse = await client.SendRequestAsync("textDocument/hover", new JsonObject
             {
                 ["textDocument"] = new JsonObject { ["uri"] = fileUri },
-                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 }
+                ["position"] = new JsonObject { ["line"] = ClassDeclarationLine, ["character"] = ClassDeclarationChar }
             }, ct);
 
             Assert.NotNull(hoverResponse);
@@ -76,7 +83,7 @@ public sealed class ServiceBRoutingTests : IDisposable
             var definitionResponse = await client.SendRequestAsync("textDocument/definition", new JsonObject
             {
                 ["textDocument"] = new JsonObject { ["uri"] = fileUri },
-                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 }
+                ["position"] = new JsonObject { ["line"] = ClassDeclarationLine, ["character"] = ClassDeclarationChar }
             }, ct);
 
             Assert.NotNull(definitionResponse);
@@ -146,7 +153,7 @@ public sealed class ServiceBRoutingTests : IDisposable
                     ["uri"] = serviceAUri,
                     ["languageId"] = "csharp",
                     ["version"] = 1,
-                    ["text"] = "namespace ServiceA.Api;\n\npublic class ServiceAClient\n{\n}\n"
+                    ["text"] = _fixture.ReadFile(ServiceAClassFilePath)
                 }
             }, ct);
 
@@ -159,7 +166,7 @@ public sealed class ServiceBRoutingTests : IDisposable
                     ["uri"] = serviceBUri,
                     ["languageId"] = "csharp",
                     ["version"] = 1,
-                    ["text"] = "namespace ServiceB.Worker;\n\npublic class ServiceBWorker\n{\n}\n"
+                    ["text"] = _fixture.ReadFile(ServiceBClassFilePath)
                 }
             }, ct);
 
@@ -167,7 +174,7 @@ public sealed class ServiceBRoutingTests : IDisposable
             var hoverA = await client.SendRequestAsync("textDocument/hover", new JsonObject
             {
                 ["textDocument"] = new JsonObject { ["uri"] = serviceAUri },
-                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 }
+                ["position"] = new JsonObject { ["line"] = ClassDeclarationLine, ["character"] = ClassDeclarationChar }
             }, ct);
             Assert.NotNull(hoverA);
             Assert.Null(hoverA["error"]);
@@ -177,7 +184,7 @@ public sealed class ServiceBRoutingTests : IDisposable
             var hoverB = await client.SendRequestAsync("textDocument/hover", new JsonObject
             {
                 ["textDocument"] = new JsonObject { ["uri"] = serviceBUri },
-                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 }
+                ["position"] = new JsonObject { ["line"] = ClassDeclarationLine, ["character"] = ClassDeclarationChar }
             }, ct);
             Assert.NotNull(hoverB);
             Assert.Null(hoverB["error"]);

@@ -6,6 +6,12 @@ namespace CsharpLspMux.E2ETests;
 
 public sealed class ServiceARoutingTests : IDisposable
 {
+    private static readonly string[] ClassFilePath = ["src", "ServiceA", "ServiceA.Api", "Class1.cs"];
+
+    // ServiceAClient class declaration
+    private const int ServiceAClientLine = 2;
+    private const int ServiceAClientChar = 13;
+
     private readonly MonoRepoFixture _fixture;
 
     public ServiceARoutingTests()
@@ -63,15 +69,15 @@ public sealed class ServiceARoutingTests : IDisposable
                     ["uri"] = fileUri,
                     ["languageId"] = "csharp",
                     ["version"] = 1,
-                    ["text"] = "namespace ServiceA.Api;\n\npublic class ServiceAClient\n{\n}\n"
+                    ["text"] = _fixture.ReadFile(ClassFilePath)
                 }
             }, ct);
 
-            // 5. textDocument/hover at ServiceAClient declaration (line 2, char 13)
+            // 5. textDocument/hover at ServiceAClient declaration
             var hoverResponse = await client.SendRequestAsync("textDocument/hover", new JsonObject
             {
                 ["textDocument"] = new JsonObject { ["uri"] = fileUri },
-                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 }
+                ["position"] = new JsonObject { ["line"] = ServiceAClientLine, ["character"] = ServiceAClientChar }
             }, ct);
 
             Assert.NotNull(hoverResponse);
@@ -83,7 +89,7 @@ public sealed class ServiceARoutingTests : IDisposable
             var definitionResponse = await client.SendRequestAsync("textDocument/definition", new JsonObject
             {
                 ["textDocument"] = new JsonObject { ["uri"] = fileUri },
-                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 }
+                ["position"] = new JsonObject { ["line"] = ServiceAClientLine, ["character"] = ServiceAClientChar }
             }, ct);
 
             Assert.NotNull(definitionResponse);
@@ -95,7 +101,7 @@ public sealed class ServiceARoutingTests : IDisposable
             var referencesResponse = await client.SendRequestAsync("textDocument/references", new JsonObject
             {
                 ["textDocument"] = new JsonObject { ["uri"] = fileUri },
-                ["position"] = new JsonObject { ["line"] = 2, ["character"] = 13 },
+                ["position"] = new JsonObject { ["line"] = ServiceAClientLine, ["character"] = ServiceAClientChar },
                 ["context"] = new JsonObject { ["includeDeclaration"] = true }
             }, ct);
 

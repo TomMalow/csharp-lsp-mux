@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="ServiceB.Worker/ServiceB.Worker.csproj" />
+  <Project Path="ServiceB.Consumer/ServiceB.Consumer.csproj" />
 </Solution>
