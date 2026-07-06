@@ -240,19 +240,22 @@ public sealed class ServiceBRoutingTests : IDisposable
             Assert.NotNull(hoverB["result"]);
             Assert.Contains("ServiceBWorker", hoverB["result"]!.ToJsonString());
 
-            // workspace/symbol broadcast — both servers must respond and results merged
+            // workspace/symbol broadcast — both servers must respond and results merged.
+            // A non-empty query is required: Roslyn returns [] for an empty query.
             var symbolResponse = await client.SendRequestAsync("workspace/symbol", new JsonObject
             {
-                ["query"] = ""
+                ["query"] = "Service"
             }, ct);
 
             Assert.NotNull(symbolResponse);
             Assert.Null(symbolResponse["error"]);
             Assert.NotNull(symbolResponse["result"]);
 
-            // workspace/symbol returns [] — likely due to empty capabilities or unanswered
-            // workspace/configuration; broadcast+merge correctness covered by unit tests.
-            Assert.IsType<JsonArray>(symbolResponse["result"]);
+            // Proves both the broadcast to all active servers and the merge of their result
+            // arrays: the merged result contains a named symbol from each solution.
+            var symbolText = symbolResponse["result"]!.ToJsonString();
+            Assert.Contains("ServiceAClient", symbolText);
+            Assert.Contains("ServiceBWorker", symbolText);
 
             var shutdownResponse = await client.SendRequestAsync("shutdown", null, ct);
             Assert.NotNull(shutdownResponse);
