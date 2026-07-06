@@ -8,10 +8,15 @@ public sealed class ServiceBRoutingTests : IDisposable
 {
     private static readonly string[] ServiceAClassFilePath = ["src", "ServiceA", "ServiceA.Api", "Class1.cs"];
     private static readonly string[] ServiceBClassFilePath = ["src", "ServiceB", "ServiceB.Worker", "Class1.cs"];
+    private static readonly string[] ServiceBConsumerFilePath = ["src", "ServiceB", "ServiceB.Consumer", "Class1.cs"];
 
     // ServiceAClient / ServiceBWorker class declarations
     private const int ClassDeclarationLine = 2;
     private const int ClassDeclarationChar = 13;
+
+    // ServiceBConsumer.Run() call site: worker.Process(1)
+    private const int ProcessCallLine = 9;
+    private const int ProcessCallChar = 22;
 
     private readonly MonoRepoFixture _fixture;
 
@@ -69,16 +74,35 @@ public sealed class ServiceBRoutingTests : IDisposable
                 }
             }, ct);
 
+            // textDocument/didOpen for the consumer, so hover can resolve the call site
+            // through its ProjectReference to the library
+            var consumerUri = new Uri(Path.Combine(_fixture.TempDir, "src", "ServiceB", "ServiceB.Consumer", "Class1.cs")).AbsoluteUri;
+            await client.SendNotificationAsync("textDocument/didOpen", new JsonObject
+            {
+                ["textDocument"] = new JsonObject
+                {
+                    ["uri"] = consumerUri,
+                    ["languageId"] = "csharp",
+                    ["version"] = 1,
+                    ["text"] = _fixture.ReadFile(ServiceBConsumerFilePath)
+                }
+            }, ct);
+
+            // textDocument/hover at the consumer's call site (worker.Process(1)) — proves
+            // the consumer resolves the library symbol across the project reference and that
+            // hover surfaces the resolved signature and XML doc summary
             var hoverResponse = await client.SendRequestAsync("textDocument/hover", new JsonObject
             {
-                ["textDocument"] = new JsonObject { ["uri"] = fileUri },
-                ["position"] = new JsonObject { ["line"] = ClassDeclarationLine, ["character"] = ClassDeclarationChar }
+                ["textDocument"] = new JsonObject { ["uri"] = consumerUri },
+                ["position"] = new JsonObject { ["line"] = ProcessCallLine, ["character"] = ProcessCallChar }
             }, ct);
 
             Assert.NotNull(hoverResponse);
             Assert.Null(hoverResponse["error"]);
             Assert.NotNull(hoverResponse["result"]);
-            Assert.Contains("ServiceBWorker", hoverResponse["result"]!.ToJsonString());
+            var hoverText = hoverResponse["result"]!.ToJsonString();
+            Assert.Contains("string ServiceBWorker.Process", hoverText);
+            Assert.Contains("SENTINEL_SERVICE_B_PROCESS_DOC", hoverText);
 
             var definitionResponse = await client.SendRequestAsync("textDocument/definition", new JsonObject
             {

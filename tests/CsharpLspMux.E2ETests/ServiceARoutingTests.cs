@@ -7,10 +7,15 @@ namespace CsharpLspMux.E2ETests;
 public sealed class ServiceARoutingTests : IDisposable
 {
     private static readonly string[] ClassFilePath = ["src", "ServiceA", "ServiceA.Api", "Class1.cs"];
+    private static readonly string[] ConsumerFilePath = ["src", "ServiceA", "ServiceA.Consumer", "Class1.cs"];
 
     // ServiceAClient class declaration
     private const int ServiceAClientLine = 2;
     private const int ServiceAClientChar = 13;
+
+    // ServiceAConsumer.Report() call site: client.GetStatus(1)
+    private const int GetStatusCallLine = 9;
+    private const int GetStatusCallChar = 22;
 
     private readonly MonoRepoFixture _fixture;
 
@@ -73,17 +78,35 @@ public sealed class ServiceARoutingTests : IDisposable
                 }
             }, ct);
 
-            // 5. textDocument/hover at ServiceAClient declaration
+            // 4b. textDocument/didOpen for the consumer, so hover can resolve the call site
+            // through its ProjectReference to the library
+            var consumerUri = new Uri(Path.Combine(_fixture.TempDir, "src", "ServiceA", "ServiceA.Consumer", "Class1.cs")).AbsoluteUri;
+            await client.SendNotificationAsync("textDocument/didOpen", new JsonObject
+            {
+                ["textDocument"] = new JsonObject
+                {
+                    ["uri"] = consumerUri,
+                    ["languageId"] = "csharp",
+                    ["version"] = 1,
+                    ["text"] = _fixture.ReadFile(ConsumerFilePath)
+                }
+            }, ct);
+
+            // 5. textDocument/hover at the consumer's call site (client.GetStatus(1)) — proves
+            // the consumer resolves the library symbol across the project reference and that
+            // hover surfaces the resolved signature and XML doc summary
             var hoverResponse = await client.SendRequestAsync("textDocument/hover", new JsonObject
             {
-                ["textDocument"] = new JsonObject { ["uri"] = fileUri },
-                ["position"] = new JsonObject { ["line"] = ServiceAClientLine, ["character"] = ServiceAClientChar }
+                ["textDocument"] = new JsonObject { ["uri"] = consumerUri },
+                ["position"] = new JsonObject { ["line"] = GetStatusCallLine, ["character"] = GetStatusCallChar }
             }, ct);
 
             Assert.NotNull(hoverResponse);
             Assert.Null(hoverResponse["error"]);
             Assert.NotNull(hoverResponse["result"]);
-            Assert.Contains("ServiceAClient", hoverResponse["result"]!.ToJsonString());
+            var hoverText = hoverResponse["result"]!.ToJsonString();
+            Assert.Contains("string ServiceAClient.GetStatus", hoverText);
+            Assert.Contains("SENTINEL_SERVICE_A_GETSTATUS_DOC", hoverText);
 
             // 6. textDocument/definition at same position
             var definitionResponse = await client.SendRequestAsync("textDocument/definition", new JsonObject
