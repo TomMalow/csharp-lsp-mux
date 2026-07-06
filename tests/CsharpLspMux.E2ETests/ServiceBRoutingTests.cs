@@ -115,6 +115,31 @@ public sealed class ServiceBRoutingTests : IDisposable
             Assert.NotNull(definitionResponse["result"]);
             Assert.Contains("/src/ServiceB/", definitionResponse["result"]!.ToJsonString());
 
+            // textDocument/references on the ServiceBWorker class declaration — proves
+            // cross-project reference resolution: the library declaration plus the
+            // `new ServiceBWorker()` usage in the consumer project of the same solution.
+            // No exact-count assertion, since whether Roslyn includes the declaration among
+            // results is version-sensitive.
+            var referencesResponse = await client.SendRequestAsync("textDocument/references", new JsonObject
+            {
+                ["textDocument"] = new JsonObject { ["uri"] = fileUri },
+                ["position"] = new JsonObject { ["line"] = ClassDeclarationLine, ["character"] = ClassDeclarationChar },
+                ["context"] = new JsonObject { ["includeDeclaration"] = true }
+            }, ct);
+
+            Assert.NotNull(referencesResponse);
+            Assert.Null(referencesResponse["error"]);
+            Assert.NotNull(referencesResponse["result"]);
+            var referencesText = referencesResponse["result"]!.ToJsonString();
+            Assert.Contains("/ServiceB.Worker/", referencesText);
+            Assert.Contains("/ServiceB.Consumer/", referencesText);
+
+            // Routing isolation: a ServiceB-scoped request must never surface ServiceA
+            // content — catches a routing bug that broadcasts a scoped request to all servers.
+            Assert.DoesNotContain("ServiceA", hoverText);
+            Assert.DoesNotContain("ServiceA", definitionResponse["result"]!.ToJsonString());
+            Assert.DoesNotContain("ServiceA", referencesText);
+
             var shutdownResponse = await client.SendRequestAsync("shutdown", null, ct);
             Assert.NotNull(shutdownResponse);
             Assert.Null(shutdownResponse["error"]);

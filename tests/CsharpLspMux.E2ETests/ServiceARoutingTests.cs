@@ -120,7 +120,11 @@ public sealed class ServiceARoutingTests : IDisposable
             Assert.NotNull(definitionResponse["result"]);
             Assert.Contains("/src/ServiceA/", definitionResponse["result"]!.ToJsonString());
 
-            // 7. textDocument/references at same position
+            // 7. textDocument/references on the ServiceAClient class declaration — proves
+            // cross-project reference resolution: the library declaration plus the
+            // `new ServiceAClient()` usage in the consumer project of the same solution.
+            // No exact-count assertion, since whether Roslyn includes the declaration among
+            // results is version-sensitive.
             var referencesResponse = await client.SendRequestAsync("textDocument/references", new JsonObject
             {
                 ["textDocument"] = new JsonObject { ["uri"] = fileUri },
@@ -131,7 +135,15 @@ public sealed class ServiceARoutingTests : IDisposable
             Assert.NotNull(referencesResponse);
             Assert.Null(referencesResponse["error"]);
             Assert.NotNull(referencesResponse["result"]);
-            Assert.Contains("ServiceA", referencesResponse["result"]!.ToJsonString());
+            var referencesText = referencesResponse["result"]!.ToJsonString();
+            Assert.Contains("/ServiceA.Api/", referencesText);
+            Assert.Contains("/ServiceA.Consumer/", referencesText);
+
+            // Routing isolation: a ServiceA-scoped request must never surface ServiceB
+            // content — catches a routing bug that broadcasts a scoped request to all servers.
+            Assert.DoesNotContain("ServiceB", hoverText);
+            Assert.DoesNotContain("ServiceB", definitionResponse["result"]!.ToJsonString());
+            Assert.DoesNotContain("ServiceB", referencesText);
 
             // 8. shutdown
             var shutdownResponse = await client.SendRequestAsync("shutdown", null, ct);
