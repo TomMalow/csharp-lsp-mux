@@ -17,7 +17,7 @@ for ((i = 1; i <= $1; i++)); do
   echo "Running Iteration: $i"
   commits=$(git log -n 5 --format="%H%n%ad%n%B---" --date=short 2>/dev/null || echo "no commits found")
   prompt=$(cat .claude/ralph/prompt.md)
-  result=$(sbx run --name private-sandbox claude -- -p \
+  result=$(sbx run --name lsp-mux claude -- -p \
     "Previous commits: $commits. Look at github for issues to work on. $prompt")
 
   echo "$result"
