@@ -1001,6 +1001,32 @@ public class RoslynServerProcessTests
     }
 
     [Fact]
+    public async Task ReadyBeforeHardTimeout_DoesNotLogFallback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new FakeFrameReader();
+        var transport = new FakeTransport();
+        var logWriter = new StringWriter();
+        var logger = new MuxLogger(LogLevel.Debug, logWriter);
+
+        var (server, _) = MakeServerWithStdin(reader, transport, logger: logger, hardTimeoutMs: 60);
+        await using var _s = server;
+
+        reader.Enqueue(MakeInitializeResponse());
+        await Task.Delay(20, ct); // past init, before hard timeout (60ms)
+        reader.Enqueue(MakeNotification("workspace/projectInitializationComplete"));
+
+        await Task.Delay(200, ct); // well past hard timeout — fallback timer should have been disarmed
+
+        Assert.Equal(ServerReadiness.Ready, server.Readiness);
+        var log = logWriter.ToString();
+        Assert.DoesNotContain("fired as fallback", log);
+        Assert.DoesNotContain("workspace ready via hard timeout", log);
+
+        reader.Complete();
+    }
+
+    [Fact]
     public async Task RelayResponse_DebugLogsId()
     {
         var ct = TestContext.Current.CancellationToken;

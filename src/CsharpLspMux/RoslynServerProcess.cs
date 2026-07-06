@@ -31,6 +31,8 @@ public sealed class RoslynServerProcess : IChildServer
     private bool _seenLoadingToken;
 
     private readonly CancellationTokenSource _cts = new();
+    // Disarms the hard-timeout fallback the moment a real readiness signal arrives.
+    private readonly CancellationTokenSource _readyCts = new();
     private readonly Task _readerTask;
     private readonly long _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
 
@@ -235,21 +237,20 @@ public sealed class RoslynServerProcess : IChildServer
                         await WriteFrameAsync(SerializeFrame(solutionOpen));
                     }
 
-                    // Hard timeout: unconditional safety net for servers that never emit progress tokens.
+                    // Hard timeout: safety net for servers that never emit a readiness signal.
+                    // _readyCts disarms it the moment the real signal arrives, so a healthy
+                    // server neither logs nor runs this — reaching past the delay genuinely
+                    // means the workspace never finished loading.
                     _ = Task.Run(async () =>
                     {
                         try
                         {
-                            await Task.Delay(_hardTimeoutMs, _cts.Token);
+                            using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, _readyCts.Token);
+                            await Task.Delay(_hardTimeoutMs, linked.Token);
                             int count;
-                            bool stillLoading;
                             lock (_initLock)
-                            {
-                                stillLoading = _readiness == ServerReadiness.Initialized;
                                 count = _pendingRequests.Count;
-                            }
-                            if (stillLoading)
-                                _logger?.Info($"workspace load timeout ({_hardTimeoutMs}ms) fired as fallback, forwarding {count} queued requests");
+                            _logger?.Info($"workspace load timeout ({_hardTimeoutMs}ms) fired as fallback, forwarding {count} queued requests");
                             _logger?.Debug("workspace ready via hard timeout");
                             await TransitionToReady();
                         }
@@ -362,6 +363,8 @@ public sealed class RoslynServerProcess : IChildServer
             pending = _pendingRequests.ToArray();
             _pendingRequests.Clear();
         }
+        // Disarm the hard-timeout fallback so it stops idling and never logs spuriously.
+        try { _readyCts.Cancel(); } catch (ObjectDisposedException) { }
         if (_logger?.IsInfoEnabled == true)
         {
             var elapsed = (long)System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds;
@@ -475,6 +478,7 @@ public sealed class RoslynServerProcess : IChildServer
             await _onDispose();
 
         _cts.Dispose();
+        _readyCts.Dispose();
         _writeLock.Dispose();
     }
 
