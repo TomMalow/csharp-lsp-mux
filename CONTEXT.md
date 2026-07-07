@@ -13,6 +13,7 @@ An LSP multiplexer that sits between Claude Code and multiple Roslyn language se
 | **Ancestor walk** | Routing strategy: walk directories upward from the file until a `.sln`/`.slnx` is found — the common case where the solution is a direct ancestor | — |
 | **Sibling scan** | Routing fallback: when ancestor walk fails, find the nearest `src/` ancestor and scan its subtree for solutions — handles files in sibling-project layouts | — |
 | **Server pool** | Bounded set of `roslyn-language-server` child processes keyed by solution path, with LRU eviction | — |
+| **Server session** | The server pool's per-entry unit: one child server plus the session state the mux keeps for it (opened URIs, in-flight request ids); lives and dies with the entry, so eviction cleans it up structurally | Not a **mux session** (one `csharp-lsp-mux` process — see ADR-0006) |
 | **Correlation ID** | The JSON-RPC `id` field; rewritten at the proxy boundary to avoid collisions between child servers | — |
 | **Content-Length framing** | The LSP wire format: `Content-Length: N\r\n\r\n{json}` | Not HTTP — no headers beyond Content-Length |
 | **Child server** | A single `roslyn-language-server` process owned by the pool, bound to one solution | — |
@@ -41,9 +42,9 @@ All `textDocument/*` methods share one routing rule: extract `params.textDocumen
 
 | Method | What Claude Code uses it for | Notes |
 |---|---|---|
-| `textDocument/didOpen` | Sent before the first request on a file | Tracked in `_openedUris` per server; replayed automatically before forwarding requests to files that were opened in a prior session |
+| `textDocument/didOpen` | Sent before the first request on a file | Tracked on the file's server session; replayed automatically before forwarding requests to files that were opened in a prior session |
 | `textDocument/didChange` | After each edit Claude makes | Forwarded verbatim (incremental sync) |
-| `textDocument/didClose` | File closed | Removed from `_openedUris` |
+| `textDocument/didClose` | File closed | Removed from the server session's opened-URI set |
 | `textDocument/hover` | Type info / docs at cursor | Forwarded; response relayed back |
 | `textDocument/definition` | Go to definition | Forwarded; response relayed back |
 | `textDocument/references` | Find all references | Forwarded; response relayed back |
@@ -63,7 +64,7 @@ All `textDocument/*` methods share one routing rule: extract `params.textDocumen
 
 | Method | Mode | What Claude Code uses it for | Mux behaviour |
 |---|---|---|---|
-| `$/cancelRequest` | Route | Cancel an in-flight request by id | Forwarded to the server that owns that correlation id |
+| `$/cancelRequest` | Route | Cancel an in-flight request by id | Forwarded to the active server session that registered that correlation id |
 
 ### Known gaps
 

@@ -28,13 +28,12 @@ public class MuxDispatcherLoggingTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class FakeServerPool : IServerPool<IChildServer>
+    private sealed class FakeServerPool : IServerPool<ServerSession>
     {
-        private readonly IChildServer _server;
-        public FakeServerPool(IChildServer server) => _server = server;
-        public Func<IChildServer, Task>? OnEviction { get; set; }
-        public Task<IChildServer> GetOrAddAsync(string key) => Task.FromResult(_server);
-        public IEnumerable<IChildServer> ActiveServers => [_server];
+        private readonly ServerSession _session;
+        public FakeServerPool(IChildServer server) => _session = new ServerSession(server);
+        public Task<ServerSession> GetOrAddAsync(string key) => Task.FromResult(_session);
+        public IEnumerable<ServerSession> ActiveSessions => [_session];
         public Task DisposeAllAsync() => Task.CompletedTask;
     }
 

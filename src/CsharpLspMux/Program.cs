@@ -42,16 +42,16 @@ var lspTransport = new LspTransport(Console.OpenStandardOutput());
 var repoRoot = Environment.GetEnvironmentVariable("REPO_ROOT") ?? Directory.GetCurrentDirectory();
 var config = new MuxConfig(repoRoot);
 var router = new SolutionRouter(repoRoot);
-var pool = new ServerPool<IChildServer>(config.MaxServers, CreateServer, logger);
+var pool = new ServerPool<ServerSession>(config.MaxServers, CreateServer);
 
-Task<IChildServer> CreateServer(string sln)
+Task<ServerSession> CreateServer(string sln)
 {
     IChildServer server = RoslynServerProcess.Start(sln, logger);
     server.OnRelayFrame += frame => new ValueTask(lspTransport.WriteFrameAsync(frame));
-    return Task.FromResult(server);
+    return Task.FromResult(new ServerSession(server));
 }
 var dispatcher = new MuxDispatcher(router, pool, lspTransport, logger: logger);
-pool.OnGracefulShutdown = s => s.ShutdownAsync();
+pool.OnGracefulShutdown = s => s.Server.ShutdownAsync();
 
 try
 {

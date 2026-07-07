@@ -6,17 +6,15 @@ namespace CsharpLspMux;
 public sealed class MuxDispatcher
 {
     private readonly ISolutionRouter _router;
-    private readonly IServerPool<IChildServer> _pool;
+    private readonly IServerPool<ServerSession> _pool;
     private readonly IFrameWriter _transport;
     private readonly Func<string, Task<string>> _readFile;
     private readonly MuxLogger? _logger;
-    private readonly RequestLedger _ledger = new();
-    private readonly OpenFileTracker _tracker = new();
     private bool _poolDrained;
 
     public MuxDispatcher(
         ISolutionRouter router,
-        IServerPool<IChildServer> pool,
+        IServerPool<ServerSession> pool,
         IFrameWriter transport,
         Func<string, Task<string>>? readFile = null,
         MuxLogger? logger = null)
@@ -26,7 +24,6 @@ public sealed class MuxDispatcher
         _transport = transport;
         _readFile = readFile ?? (path => File.ReadAllTextAsync(path));
         _logger = logger;
-        pool.OnEviction = s => { NotifyEviction(s); return Task.CompletedTask; };
     }
 
     public Task<bool> HandleMessageAsync(Frame message)
@@ -98,7 +95,8 @@ public sealed class MuxDispatcher
 
             if (solutionPath is not null)
             {
-                var server = await _pool.GetOrAddAsync(solutionPath);
+                var session = await _pool.GetOrAddAsync(solutionPath);
+                var server = session.Server;
 
                 if (_logger?.IsInfoEnabled == true)
                 {
@@ -108,20 +106,20 @@ public sealed class MuxDispatcher
 
                 if (method == "textDocument/didClose")
                 {
-                    _tracker.MarkClosed(server, uri);
+                    session.MarkClosed(uri);
                     await server.ForwardNotificationAsync(message);
                 }
                 else if (method == "textDocument/didOpen")
                 {
-                    _tracker.MarkOpened(server, uri);
+                    session.MarkOpened(uri);
                     await server.ForwardNotificationAsync(message);
                 }
                 else
                 {
-                    if (message.Id is not null && !_tracker.IsOpened(server, uri))
-                        await EnsureOpenAsync(server, uri, filePath);
+                    if (message.Id is not null && !session.IsOpened(uri))
+                        await EnsureOpenAsync(session, uri, filePath);
                     if (message.Id is JsonNode requestId)
-                        _ledger.Register(JsonNodeToKey(requestId), server);
+                        session.Register(JsonNodeToKey(requestId));
                     await server.ForwardRequestAsync(message);
                 }
             }
@@ -135,7 +133,7 @@ public sealed class MuxDispatcher
         return true;
     }
 
-    private async Task EnsureOpenAsync(IChildServer server, string uri, string filePath)
+    private async Task EnsureOpenAsync(ServerSession session, string uri, string filePath)
     {
         _logger?.Debug($"synthetic didOpen {uri}");
         string text;
@@ -157,8 +155,8 @@ public sealed class MuxDispatcher
                 }
             }
         };
-        await server.ForwardNotificationAsync(Frame.FromJson(didOpen));
-        _tracker.MarkOpened(server, uri);
+        await session.Server.ForwardNotificationAsync(Frame.FromJson(didOpen));
+        session.MarkOpened(uri);
     }
 
     private async Task<bool> HandleCancelRequest(Frame message)
@@ -167,11 +165,11 @@ public sealed class MuxDispatcher
         if (cancelId is not null)
         {
             var key = JsonNodeToKey(cancelId);
-            var owner = _ledger.Lookup(key);
+            var owner = _pool.ActiveSessions.FirstOrDefault(s => s.OwnsRequest(key));
             if (owner is not null)
             {
-                _ledger.Remove(key);
-                await owner.ForwardRequestAsync(message);
+                owner.Remove(key);
+                await owner.Server.ForwardRequestAsync(message);
             }
         }
         return true;
@@ -180,7 +178,7 @@ public sealed class MuxDispatcher
     private async Task<bool> HandleWorkspaceSymbol(Frame message)
     {
         var requestId = message.Id;
-        var servers = _pool.ActiveServers.ToList();
+        var servers = _pool.ActiveSessions.Select(s => s.Server).ToList();
 
         if (servers.Count == 0)
         {
@@ -214,8 +212,8 @@ public sealed class MuxDispatcher
 
     private async Task<bool> HandleDidChangeConfiguration(Frame message)
     {
-        foreach (var server in _pool.ActiveServers.ToList())
-            await server.ForwardRequestAsync(message);
+        foreach (var session in _pool.ActiveSessions.ToList())
+            await session.Server.ForwardRequestAsync(message);
         return true;
     }
 
@@ -253,12 +251,6 @@ public sealed class MuxDispatcher
         if (!_poolDrained)
             await _pool.DisposeAllAsync();
         return false;
-    }
-
-    private void NotifyEviction(IChildServer evicted)
-    {
-        _ledger.EvictServer(evicted);
-        _tracker.EvictServer(evicted);
     }
 
     private static string JsonNodeToKey(JsonNode node) => node.ToJsonString();

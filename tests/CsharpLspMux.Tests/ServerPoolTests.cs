@@ -126,13 +126,13 @@ public sealed class ServerPoolTests
     }
 
     [Fact]
-    public async Task ActiveServers_ReturnsLiveEntries()
+    public async Task ActiveSessions_ReturnsLiveEntries()
     {
         var pool = MakePool(10);
         var a = await pool.GetOrAddAsync("slnA");
         var b = await pool.GetOrAddAsync("slnB");
 
-        var active = pool.ActiveServers.ToList();
+        var active = pool.ActiveSessions.ToList();
 
         Assert.Equal(2, active.Count);
         Assert.Contains(a, active);
@@ -140,88 +140,32 @@ public sealed class ServerPoolTests
     }
 
     [Fact]
-    public async Task ActiveServers_EvictedEntry_NotIncluded()
+    public async Task ActiveSessions_EvictedEntry_NotIncluded()
     {
         var pool = MakePool(2);
         var a = await pool.GetOrAddAsync("slnA");
         await pool.GetOrAddAsync("slnB");
         await pool.GetOrAddAsync("slnC"); // evicts slnA
 
-        var active = pool.ActiveServers.ToList();
+        var active = pool.ActiveSessions.ToList();
 
         Assert.Equal(2, active.Count);
         Assert.DoesNotContain(a, active);
     }
 
     [Fact]
-    public async Task OnEviction_CalledWithEvictedServer_AfterDispose()
+    public async Task Eviction_DisposesSession_AndCancelForItsRequestFindsNoOwner()
     {
-        FakeServer? handlerArg = null;
-        int disposeCountInHandler = -1;
-        var pool = MakePool(2);
-        pool.OnEviction = s =>
-        {
-            handlerArg = s;
-            disposeCountInHandler = s.DisposeCount;
-            return Task.CompletedTask;
-        };
-
+        var pool = new ServerPool<ServerSession>(cap: 2, factory: _ => Task.FromResult(new ServerSession(new FakeServer())));
         var a = await pool.GetOrAddAsync("slnA");
+        a.Register("req-1");
         await pool.GetOrAddAsync("slnB");
+
         await pool.GetOrAddAsync("slnC"); // evicts slnA
 
-        Assert.Same(a, handlerArg);
-        Assert.Equal(1, disposeCountInHandler); // handler ran after DisposeAsync
-    }
-
-    [Fact]
-    public async Task OnEviction_HandlerThrows_DoesNotPropagateToPool()
-    {
-        var pool = MakePool(2);
-        pool.OnEviction = _ => throw new InvalidOperationException("handler error");
-
-        await pool.GetOrAddAsync("slnA");
-        await pool.GetOrAddAsync("slnB");
-
-        var ex = await Record.ExceptionAsync(() => pool.GetOrAddAsync("slnC"));
-        Assert.Null(ex);
-    }
-
-    [Fact]
-    public async Task OnEviction_HandlerThrows_LogsError()
-    {
-        var logOutput = new StringWriter();
-        var logger = new MuxLogger(LogLevel.Debug, logOutput);
-        var pool = new ServerPool<FakeServer>(cap: 2, factory: _ => Task.FromResult(new FakeServer()), logger: logger);
-        pool.OnEviction = _ => throw new InvalidOperationException("boom");
-
-        await pool.GetOrAddAsync("slnA");
-        await pool.GetOrAddAsync("slnB");
-        await pool.GetOrAddAsync("slnC"); // evicts slnA, handler throws
-
-        Assert.Contains("boom", logOutput.ToString());
-    }
-
-    [Fact]
-    public async Task Integration_LruOverflow_HandlerCalledForEachEviction()
-    {
-        var evictedServers = new List<FakeServer>();
-        var pool = new ServerPool<FakeServer>(cap: 2, factory: _ => Task.FromResult(new FakeServer()));
-        pool.OnEviction = s => { evictedServers.Add(s); return Task.CompletedTask; };
-
-        var a = await pool.GetOrAddAsync("slnA");
-        var b = await pool.GetOrAddAsync("slnB");
-        await pool.GetOrAddAsync("slnC"); // evicts slnA
-
-        Assert.Single(evictedServers);
-        Assert.Same(a, evictedServers[0]);
-        Assert.Equal(1, a.DisposeCount);
-
-        await pool.GetOrAddAsync("slnD"); // evicts slnB
-
-        Assert.Equal(2, evictedServers.Count);
-        Assert.Same(b, evictedServers[1]);
-        Assert.Equal(1, b.DisposeCount);
+        Assert.Equal(1, ((FakeServer)a.Server).DisposeCount);
+        Assert.DoesNotContain(a, pool.ActiveSessions);
+        Assert.DoesNotContain(pool.ActiveSessions, s => s.OwnsRequest("req-1"));
     }
 
     [Fact]

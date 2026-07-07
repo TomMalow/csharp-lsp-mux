@@ -78,27 +78,23 @@ public class MuxDispatcherTests
         public ValueTask DisposeAsync() { DisposeCount++; return ValueTask.CompletedTask; }
     }
 
-    private sealed class FakeServerPool : IServerPool<IChildServer>
+    private sealed class FakeServerPool : IServerPool<ServerSession>
     {
-        private readonly Dictionary<string, IChildServer> _servers = new();
+        private readonly Dictionary<string, ServerSession> _sessions = new();
 
-        public Func<IChildServer, Task>? OnEviction { get; set; }
-
-        public Task<IChildServer> GetOrAddAsync(string key)
+        public Task<ServerSession> GetOrAddAsync(string key)
         {
-            if (!_servers.TryGetValue(key, out var server))
+            if (!_sessions.TryGetValue(key, out var session))
             {
-                server = new FakeServer();
-                _servers[key] = server;
+                session = new ServerSession(new FakeServer());
+                _sessions[key] = session;
             }
-            return Task.FromResult(server);
+            return Task.FromResult(session);
         }
 
-        public IEnumerable<IChildServer> ActiveServers => _servers.Values;
+        public IEnumerable<ServerSession> ActiveSessions => _sessions.Values;
 
         public Task DisposeAllAsync() => Task.CompletedTask;
-
-        public Task TriggerEviction(IChildServer server) => OnEviction?.Invoke(server) ?? Task.CompletedTask;
     }
 
     // --- helpers ---
@@ -185,7 +181,7 @@ public class MuxDispatcherTests
     {
         var sln = "/repo/App.slnx";
         var (dispatcher, transport, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
 
         var msg = Msg("textDocument/hover", id: JsonValue.Create(2),
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri("/repo/src/Foo.cs") } });
@@ -235,7 +231,7 @@ public class MuxDispatcherTests
     {
         var sln = "/repo/App.slnx";
         var (dispatcher, transport, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
 
         // Register a textDocument request so requestOwners has an entry
         var textDocMsg = Msg("textDocument/hover", id: JsonValue.Create(5),
@@ -292,8 +288,8 @@ public class MuxDispatcherTests
 
         var serverA = new FakeServer { SendAndReceiveHandler = _ => MakeSymbolResponse("Alpha") };
         var serverB = new FakeServer { SendAndReceiveHandler = _ => MakeSymbolResponse("Beta") };
-        var pool = new ServerPool<IChildServer>(10, key =>
-            Task.FromResult<IChildServer>(key == sln1 ? serverA : serverB));
+        var pool = new ServerPool<ServerSession>(10, key =>
+            Task.FromResult(new ServerSession(key == sln1 ? serverA : serverB)));
         var dispatcher = new MuxDispatcher(router, pool, transport);
 
         await pool.GetOrAddAsync(sln1);
@@ -343,7 +339,7 @@ public class MuxDispatcherTests
         var transport = new FakeTransport();
         var router = new FakeRouter { RouteResult = sln };
         var server = new FakeServer();
-        var pool = new ServerPool<IChildServer>(10, _ => Task.FromResult<IChildServer>(server));
+        var pool = new ServerPool<ServerSession>(10, _ => Task.FromResult(new ServerSession(server)));
         var dispatcher = new MuxDispatcher(router, pool, transport);
 
         await pool.GetOrAddAsync(sln);
@@ -364,7 +360,7 @@ public class MuxDispatcherTests
         var transport = new FakeTransport();
         var router = new FakeRouter { RouteResult = sln };
         var server = new FakeServer();
-        var pool = new ServerPool<IChildServer>(10, _ => Task.FromResult<IChildServer>(server));
+        var pool = new ServerPool<ServerSession>(10, _ => Task.FromResult(new ServerSession(server)));
         var dispatcher = new MuxDispatcher(router, pool, transport);
 
         await pool.GetOrAddAsync(sln);
@@ -381,7 +377,7 @@ public class MuxDispatcherTests
         var transport = new FakeTransport();
         var router = new FakeRouter { RouteResult = sln };
         var server = new FakeServer();
-        var pool = new ServerPool<IChildServer>(10, _ => Task.FromResult<IChildServer>(server));
+        var pool = new ServerPool<ServerSession>(10, _ => Task.FromResult(new ServerSession(server)));
         var dispatcher = new MuxDispatcher(router, pool, transport);
 
         await pool.GetOrAddAsync(sln);
@@ -438,7 +434,7 @@ public class MuxDispatcherTests
         {
             SendAndReceiveHandler = _ => throw new InvalidOperationException("server dead")
         };
-        var pool = new ServerPool<IChildServer>(10, _ => Task.FromResult<IChildServer>(server));
+        var pool = new ServerPool<ServerSession>(10, _ => Task.FromResult(new ServerSession(server)));
         var dispatcher = new MuxDispatcher(router, pool, transport);
 
         await pool.GetOrAddAsync(sln);
@@ -462,7 +458,7 @@ public class MuxDispatcherTests
         var (dispatcher, _, _, pool) = Make(
             routeResult: sln,
             readFile: path => { readFileCalls.Add(path); return Task.FromResult(fileContent); });
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
 
         var msg = Msg("textDocument/hover", id: JsonValue.Create(2),
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
@@ -490,7 +486,7 @@ public class MuxDispatcherTests
         var (dispatcher, _, _, pool) = Make(
             routeResult: sln,
             readFile: _ => { readFileCount++; return Task.FromResult("class Foo {}"); });
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
 
         var didOpenMsg = Msg("textDocument/didOpen",
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
@@ -516,7 +512,7 @@ public class MuxDispatcherTests
         var (dispatcher, _, _, pool) = Make(
             routeResult: sln,
             readFile: _ => { readFileCount++; return Task.FromResult(""); });
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
 
         var didOpenMsg = Msg("textDocument/didOpen",
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
@@ -538,7 +534,7 @@ public class MuxDispatcherTests
         var (dispatcher, _, _, pool) = Make(
             routeResult: sln,
             readFile: _ => { readFileCount++; return Task.FromResult("class Foo {}"); });
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
 
         var uri = FileUri(filePath);
         await dispatcher.HandleMessageAsync(Msg("textDocument/didOpen",
@@ -559,41 +555,12 @@ public class MuxDispatcherTests
     }
 
     [Fact]
-    public async Task NotifyEviction_ClearsOpenedUris_SynthesizesOnNextRequest()
-    {
-        var sln = "/repo/App.slnx";
-        var filePath = "/repo/src/Foo.cs";
-        var readFileCount = 0;
-        var (dispatcher, _, router, pool) = Make(
-            routeResult: sln,
-            readFile: _ => { readFileCount++; return Task.FromResult("class Foo {}"); });
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
-
-        var uri = FileUri(filePath);
-        await dispatcher.HandleMessageAsync(Msg("textDocument/didOpen",
-            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
-        server.ForwardedFrames.Clear();
-        server.NotificationFrames.Clear();
-
-        await pool.TriggerEviction(server);
-
-        await dispatcher.HandleMessageAsync(Msg("textDocument/hover", id: JsonValue.Create(4),
-            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
-
-        Assert.Single(server.NotificationFrames); // synthesized didOpen
-        Assert.Single(server.ForwardedFrames);    // hover request
-        var synthesized = JsonSerializer.Deserialize<JsonObject>(server.NotificationFrames[0])!;
-        Assert.Equal("textDocument/didOpen", synthesized["method"]?.GetValue<string>());
-        Assert.Equal(1, readFileCount);
-    }
-
-    [Fact]
     public async Task TextDocument_DidOpen_UsesForwardNotificationAsync()
     {
         var sln = "/repo/App.slnx";
         var filePath = "/repo/src/Foo.cs";
         var (dispatcher, _, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
 
         var didOpenMsg = Msg("textDocument/didOpen",
             @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri(filePath) } });
@@ -611,7 +578,7 @@ public class MuxDispatcherTests
         var sln = "/repo/App.slnx";
         var filePath = "/repo/src/Foo.cs";
         var (dispatcher, _, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
 
         // Open first so close doesn't short-circuit
         var uri = FileUri(filePath);
@@ -635,7 +602,7 @@ public class MuxDispatcherTests
         var sln = "/repo/App.slnx";
         var filePath = "/repo/src/Foo.cs";
         var (dispatcher, _, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
 
         // Open first so no synthesized didOpen
         var uri = FileUri(filePath);
@@ -662,8 +629,8 @@ public class MuxDispatcherTests
         var router = new FakeRouter();
         var serverA = new FakeServer();
         var serverB = new FakeServer();
-        var pool = new ServerPool<IChildServer>(10, key =>
-            Task.FromResult<IChildServer>(key == sln1 ? serverA : serverB));
+        var pool = new ServerPool<ServerSession>(10, key =>
+            Task.FromResult(new ServerSession(key == sln1 ? serverA : serverB)));
         var dispatcher = new MuxDispatcher(router, pool, transport);
 
         await pool.GetOrAddAsync(sln1);
@@ -686,26 +653,4 @@ public class MuxDispatcherTests
         Assert.Equal("workspace/didChangeConfiguration", forwarded["method"]?.GetValue<string>());
     }
 
-    [Fact]
-    public async Task NotifyEviction_RemovesEvictedServerEntries()
-    {
-        var sln = "/repo/App.slnx";
-        var (dispatcher, _, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
-        var server = (FakeServer)await pool.GetOrAddAsync(sln);
-
-        // Forward a textDocument request to register in requestOwners
-        var textDocMsg = Msg("textDocument/hover", id: JsonValue.Create(9),
-            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = FileUri("/repo/src/Foo.cs") } });
-        await dispatcher.HandleMessageAsync(textDocMsg);
-
-        await pool.TriggerEviction(server);
-
-        // Cancel should no longer forward (owner was evicted)
-        server.ForwardedFrames.Clear();
-        var cancelMsg = Msg("$/cancelRequest",
-            @params: new JsonObject { ["id"] = JsonValue.Create(9) });
-        await dispatcher.HandleMessageAsync(cancelMsg);
-
-        Assert.Empty(server.ForwardedFrames);
-    }
 }
