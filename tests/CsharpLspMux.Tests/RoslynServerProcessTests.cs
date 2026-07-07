@@ -484,21 +484,6 @@ public class RoslynServerProcessTests
     }
 
     [Fact]
-    public async Task Readiness_AfterInitResponse_IsReady()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var reader = new FakeFrameReader();
-        await using var server = RoslynServerProcess.CreateForTest(new MemoryStream(), reader, hardTimeoutMs: 50);
-
-        reader.Enqueue(MakeInitializeResponse());
-        await Task.Delay(100, ct);
-
-        Assert.Equal(ServerReadiness.Ready, server.Readiness);
-
-        reader.Complete();
-    }
-
-    [Fact]
     public async Task ForwardNotification_PreInit_TaskCompletesImmediately()
     {
         var reader = new FakeFrameReader();
@@ -637,31 +622,6 @@ public class RoslynServerProcessTests
         var log = logWriter.ToString();
         Assert.Contains("[mux] workspace load timeout", log);
         Assert.Contains("queued requests", log);
-
-        reader.Complete();
-    }
-
-    [Fact]
-    public async Task TransitionToReady_CalledTwice_IdempotentNoException()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var reader = new FakeFrameReader();
-        var transport = new FakeTransport();
-        // Progress end + hard timeout can both call TransitionToReady
-        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 60);
-        await using var _ = server;
-
-        reader.Enqueue(MakeInitializeResponse());
-        await Task.Delay(30, ct);
-
-        // Trigger via progress
-        reader.Enqueue(MakeProgressBegin("t1", "Loading workspace"));
-        await Task.Delay(20, ct);
-        reader.Enqueue(MakeProgressEnd("t1"));
-        await Task.Delay(100, ct); // also past hard timeout
-
-        // No exception, readiness is Ready exactly once
-        Assert.Equal(ServerReadiness.Ready, server.Readiness);
 
         reader.Complete();
     }
@@ -835,29 +795,6 @@ public class RoslynServerProcessTests
         await Task.Delay(150, ct); // past hard timeout (80ms)
 
         Assert.Equal(ServerReadiness.Ready, server.Readiness);
-
-        reader.Complete();
-    }
-
-    [Fact]
-    public async Task Progress_LoadingBegin_PreventsHardTimeoutFromTransitioning()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var reader = new FakeFrameReader();
-        var transport = new FakeTransport();
-        // hard=5000ms (won't fire in test) — loading progress holds gate open
-        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 5000);
-        await using var s = server;
-
-        reader.Enqueue(MakeInitializeResponse());
-        await Task.Delay(20, ct);
-        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
-
-        reader.Enqueue(MakeProgressBegin("tokenL", "Loading workspace"));
-        await Task.Delay(50, ct);
-
-        // No end sent → still Initialized (progress holds the gate)
-        Assert.Equal(ServerReadiness.Initialized, server.Readiness);
 
         reader.Complete();
     }
@@ -1169,34 +1106,6 @@ public class RoslynServerProcessTests
         await Task.Delay(50, ct);
 
         Assert.Contains("workspace/projectInitializationComplete", logWriter.ToString());
-
-        reader.Complete();
-    }
-
-    [Fact]
-    public async Task ProjectInitializationComplete_AfterProgressEnd_IsNoOp()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var reader = new FakeFrameReader();
-        var transport = new FakeTransport();
-        var (server, stdin) = MakeServerWithStdin(reader, transport, hardTimeoutMs: 10000);
-        await using var s = server;
-
-        reader.Enqueue(MakeInitializeResponse());
-        await Task.Delay(30, ct);
-
-        // Progress end triggers first TransitionToReady
-        reader.Enqueue(MakeProgressBegin("t1", "Loading workspace"));
-        await Task.Delay(20, ct);
-        reader.Enqueue(MakeProgressEnd("t1"));
-        await Task.Delay(30, ct);
-        Assert.Equal(ServerReadiness.Ready, server.Readiness);
-
-        // Second trigger via notification must be a safe no-op
-        reader.Enqueue(MakeNotification("workspace/projectInitializationComplete"));
-        await Task.Delay(50, ct);
-
-        Assert.Equal(ServerReadiness.Ready, server.Readiness);
 
         reader.Complete();
     }

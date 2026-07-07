@@ -20,15 +20,10 @@ public sealed class RoslynServerProcess : IChildServer
 
     public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame;
 
-    private readonly object _initLock = new();
-    private ServerReadiness _readiness = ServerReadiness.Starting;
-    private readonly List<byte[]> _pendingNotifications = new();
-    private readonly List<byte[]> _pendingRequests = new();
+    private readonly WorkspaceReadiness _readiness = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
     private readonly int _hardTimeoutMs;
-    private readonly HashSet<string> _loadingTokens = new();
-    private bool _seenLoadingToken;
 
     private readonly CancellationTokenSource _cts = new();
     // Disarms the hard-timeout fallback the moment a real readiness signal arrives.
@@ -40,7 +35,7 @@ public sealed class RoslynServerProcess : IChildServer
     private int _syntheticIdCounter;
     private int _disposed;
 
-    public ServerReadiness Readiness { get { lock (_initLock) return _readiness; } }
+    public ServerReadiness Readiness => _readiness.State;
 
     private RoslynServerProcess(Stream stdin, IFrameReader reader, Func<Task>? onDispose, MuxLogger? logger = null, string? solutionPath = null, int hardTimeoutMs = -1)
     {
@@ -149,36 +144,28 @@ public sealed class RoslynServerProcess : IChildServer
 
     public Task ForwardRequestAsync(byte[] frame)
     {
-        lock (_initLock)
+        if (_readiness.Gate(frame, FrameKind.Request) == GateDecision.Queued)
         {
-            if (_readiness != ServerReadiness.Ready)
+            if (_logger?.IsDebugEnabled == true)
             {
-                if (_logger?.IsDebugEnabled == true)
-                {
-                    var (method, id) = ParseFrameLogFields(frame);
-                    _logger.Debug($"queued request {method} id={id}");
-                }
-                _pendingRequests.Add(frame);
-                return Task.CompletedTask;
+                var (method, id) = ParseFrameLogFields(frame);
+                _logger.Debug($"queued request {method} id={id}");
             }
+            return Task.CompletedTask;
         }
         return WriteFrameAsync(frame);
     }
 
     public Task ForwardNotificationAsync(byte[] frame)
     {
-        lock (_initLock)
+        if (_readiness.Gate(frame, FrameKind.Notification) == GateDecision.Queued)
         {
-            if (_readiness == ServerReadiness.Starting)
+            if (_logger?.IsDebugEnabled == true)
             {
-                if (_logger?.IsDebugEnabled == true)
-                {
-                    var (method, _) = ParseFrameLogFields(frame);
-                    _logger.Debug($"queued notification {method}");
-                }
-                _pendingNotifications.Add(frame);
-                return Task.CompletedTask;
+                var (method, _) = ParseFrameLogFields(frame);
+                _logger.Debug($"queued notification {method}");
             }
+            return Task.CompletedTask;
         }
         return WriteFrameAsync(frame);
     }
@@ -207,20 +194,14 @@ public sealed class RoslynServerProcess : IChildServer
                 {
                     var initialized = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "initialized", ["params"] = new JsonObject() };
                     await WriteFrameAsync(SerializeFrame(initialized));
-                    byte[][] pendingNotifications;
-                    lock (_initLock)
-                    {
-                        _readiness = ServerReadiness.Initialized;
-                        pendingNotifications = _pendingNotifications.ToArray();
-                        _pendingNotifications.Clear();
-                    }
+                    var initResult = _readiness.Observe(new ReadinessSignal.Initialized());
                     if (_logger?.IsInfoEnabled == true)
                     {
                         var elapsed = (long)(System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds);
                         _logger.Info($"server {_solutionPath} initialized in {elapsed}ms");
                     }
-                    _logger?.Debug($"draining {pendingNotifications.Length} queued notifications");
-                    foreach (var f in pendingNotifications)
+                    _logger?.Debug($"draining {initResult.FramesToDrain.Count} queued notifications");
+                    foreach (var f in initResult.FramesToDrain)
                         await WriteFrameAsync(f);
 
                     if (_solutionPath is not null)
@@ -247,12 +228,13 @@ public sealed class RoslynServerProcess : IChildServer
                         {
                             using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, _readyCts.Token);
                             await Task.Delay(_hardTimeoutMs, linked.Token);
-                            int count;
-                            lock (_initLock)
-                                count = _pendingRequests.Count;
-                            _logger?.Info($"workspace load timeout ({_hardTimeoutMs}ms) fired as fallback, forwarding {count} queued requests");
-                            _logger?.Debug("workspace ready via hard timeout");
-                            await TransitionToReady();
+                            var result = _readiness.Observe(new ReadinessSignal.HardTimeoutElapsed());
+                            if (result.Transition == ReadinessTransition.BecameReady)
+                            {
+                                _logger?.Info($"workspace load timeout ({_hardTimeoutMs}ms) fired as fallback, forwarding {result.FramesToDrain.Count} queued requests");
+                                _logger?.Debug("workspace ready via hard timeout");
+                            }
+                            await ApplyBecameReady(result);
                         }
                         catch (OperationCanceledException) { }
                     });
@@ -287,7 +269,7 @@ public sealed class RoslynServerProcess : IChildServer
                 if (method == "workspace/projectInitializationComplete")
                 {
                     _logger?.Info($"server {_solutionPath} received workspace/projectInitializationComplete");
-                    await TransitionToReady();
+                    await ApplyBecameReady(_readiness.Observe(new ReadinessSignal.ProjectInitializationComplete()));
                     continue;
                 }
 
@@ -303,16 +285,11 @@ public sealed class RoslynServerProcess : IChildServer
                         {
                             var title = value?["title"]?.GetValue<string>() ?? "";
                             if (title.Contains("Loading", StringComparison.OrdinalIgnoreCase))
-                            {
-                                _loadingTokens.Add(tokenKey);
-                                _seenLoadingToken = true;
-                            }
+                                _readiness.Observe(new ReadinessSignal.LoadingBegan(tokenKey));
                         }
                         else if (kind == "end")
                         {
-                            _loadingTokens.Remove(tokenKey);
-                            if (_loadingTokens.Count == 0 && _seenLoadingToken)
-                                await TransitionToReady();
+                            await ApplyBecameReady(_readiness.Observe(new ReadinessSignal.ProgressEnded(tokenKey)));
                         }
                     }
                     continue;
@@ -353,16 +330,9 @@ public sealed class RoslynServerProcess : IChildServer
         }
     }
 
-    private async Task TransitionToReady()
+    private async Task ApplyBecameReady(ObserveResult result)
     {
-        byte[][] pending;
-        lock (_initLock)
-        {
-            if (_readiness != ServerReadiness.Initialized) return;
-            _readiness = ServerReadiness.Ready;
-            pending = _pendingRequests.ToArray();
-            _pendingRequests.Clear();
-        }
+        if (result.Transition != ReadinessTransition.BecameReady) return;
         // Disarm the hard-timeout fallback so it stops idling and never logs spuriously.
         try { _readyCts.Cancel(); } catch (ObjectDisposedException) { }
         if (_logger?.IsInfoEnabled == true)
@@ -370,8 +340,8 @@ public sealed class RoslynServerProcess : IChildServer
             var elapsed = (long)System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds;
             _logger.Info($"server {_solutionPath} workspace ready in {elapsed}ms");
         }
-        _logger?.Debug($"draining {pending.Length} queued requests");
-        foreach (var f in pending)
+        _logger?.Debug($"draining {result.FramesToDrain.Count} queued requests");
+        foreach (var f in result.FramesToDrain)
             await WriteFrameAsync(f);
     }
 
@@ -467,12 +437,6 @@ public sealed class RoslynServerProcess : IChildServer
         await _cts.CancelAsync();
 
         try { await _readerTask; } catch { }
-
-        lock (_initLock)
-        {
-            _pendingNotifications.Clear();
-            _pendingRequests.Clear();
-        }
 
         if (_onDispose is not null)
             await _onDispose();
