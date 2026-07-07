@@ -1,14 +1,11 @@
-using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Xunit;
 
 namespace CsharpLspMux.E2ETests;
 
-public sealed class ServiceARoutingTests : IDisposable
+[Collection(MuxServerCollection.Name)]
+public sealed class ServiceARoutingTests(MuxServerFixture fixture)
 {
-    private static readonly string[] ClassFilePath = ["src", "ServiceA", "ServiceA.Api", "Class1.cs"];
-    private static readonly string[] ConsumerFilePath = ["src", "ServiceA", "ServiceA.Consumer", "Class1.cs"];
-
     // ServiceAClient class declaration
     private const int ServiceAClientLine = 2;
     private const int ServiceAClientChar = 13;
@@ -17,151 +14,98 @@ public sealed class ServiceARoutingTests : IDisposable
     private const int GetStatusCallLine = 9;
     private const int GetStatusCallChar = 22;
 
-    private readonly MonoRepoFixture _fixture;
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(120);
 
-    public ServiceARoutingTests()
+    [Fact]
+    [Trait("Category", "E2E")]
+    public async Task Hover_AtConsumerCallSite_ResolvesLibrarySignatureAndDoc()
     {
-        _fixture = new MonoRepoFixture();
+        using var cts = new CancellationTokenSource(Timeout);
+
+        // Hover at the consumer's call site (client.GetStatus(1)) — proves the consumer resolves
+        // the library symbol across the project reference and that hover surfaces the resolved
+        // signature and XML doc summary.
+        var hoverResponse = await fixture.Client.SendRequestAsync("textDocument/hover", new JsonObject
+        {
+            ["textDocument"] = new JsonObject { ["uri"] = fixture.ServiceAConsumerUri },
+            ["position"] = new JsonObject { ["line"] = GetStatusCallLine, ["character"] = GetStatusCallChar }
+        }, cts.Token);
+
+        Assert.NotNull(hoverResponse);
+        Assert.Null(hoverResponse["error"]);
+        Assert.NotNull(hoverResponse["result"]);
+        var hoverText = hoverResponse["result"]!.ToJsonString();
+        Assert.Contains("string ServiceAClient.GetStatus", hoverText);
+        Assert.Contains("SENTINEL_SERVICE_A_GETSTATUS_DOC", hoverText);
+
+        // Routing isolation: a ServiceA-scoped request must never surface ServiceB content —
+        // catches a routing bug that broadcasts a scoped request to all servers.
+        Assert.DoesNotContain("ServiceB", hoverText);
     }
 
     [Fact]
     [Trait("Category", "E2E")]
-    public async Task ServiceA_HoverAndDefinition_ReturnsServiceASymbols()
+    public async Task Definition_OnClassDeclaration_ReturnsServiceASymbol()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
-        var ct = cts.Token;
+        using var cts = new CancellationTokenSource(Timeout);
 
-        var psi = new ProcessStartInfo("dotnet", MuxPaths.MuxDll)
+        var definitionResponse = await fixture.Client.SendRequestAsync("textDocument/definition", new JsonObject
         {
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            Environment = { ["REPO_ROOT"] = _fixture.TempDir }
-        };
+            ["textDocument"] = new JsonObject { ["uri"] = fixture.ServiceAApiUri },
+            ["position"] = new JsonObject { ["line"] = ServiceAClientLine, ["character"] = ServiceAClientChar }
+        }, cts.Token);
 
-        using var process = Process.Start(psi)!;
-        try
-        {
-            using var client = new LspClient(process.StandardInput.BaseStream, process.StandardOutput.BaseStream);
-
-            // 1. initialize
-            var initResponse = await client.SendRequestAsync("initialize", new JsonObject
-            {
-                ["processId"] = Environment.ProcessId,
-                ["rootUri"] = new Uri(_fixture.TempDir).AbsoluteUri,
-                ["capabilities"] = new JsonObject()
-            }, ct);
-
-            Assert.NotNull(initResponse);
-            Assert.Null(initResponse["error"]);
-
-            // 2. initialized notification
-            await client.SendNotificationAsync("initialized", new JsonObject(), ct);
-
-            // 3. workspace/didChangeConfiguration
-            await client.SendNotificationAsync("workspace/didChangeConfiguration", new JsonObject
-            {
-                ["settings"] = new JsonObject()
-            }, ct);
-
-            // 4. textDocument/didOpen for ServiceA Class1.cs
-            var fileUri = new Uri(Path.Combine(_fixture.TempDir, "src", "ServiceA", "ServiceA.Api", "Class1.cs")).AbsoluteUri;
-            await client.SendNotificationAsync("textDocument/didOpen", new JsonObject
-            {
-                ["textDocument"] = new JsonObject
-                {
-                    ["uri"] = fileUri,
-                    ["languageId"] = "csharp",
-                    ["version"] = 1,
-                    ["text"] = _fixture.ReadFile(ClassFilePath)
-                }
-            }, ct);
-
-            // 4b. textDocument/didOpen for the consumer, so hover can resolve the call site
-            // through its ProjectReference to the library
-            var consumerUri = new Uri(Path.Combine(_fixture.TempDir, "src", "ServiceA", "ServiceA.Consumer", "Class1.cs")).AbsoluteUri;
-            await client.SendNotificationAsync("textDocument/didOpen", new JsonObject
-            {
-                ["textDocument"] = new JsonObject
-                {
-                    ["uri"] = consumerUri,
-                    ["languageId"] = "csharp",
-                    ["version"] = 1,
-                    ["text"] = _fixture.ReadFile(ConsumerFilePath)
-                }
-            }, ct);
-
-            // 5. textDocument/hover at the consumer's call site (client.GetStatus(1)) — proves
-            // the consumer resolves the library symbol across the project reference and that
-            // hover surfaces the resolved signature and XML doc summary
-            var hoverResponse = await client.SendRequestAsync("textDocument/hover", new JsonObject
-            {
-                ["textDocument"] = new JsonObject { ["uri"] = consumerUri },
-                ["position"] = new JsonObject { ["line"] = GetStatusCallLine, ["character"] = GetStatusCallChar }
-            }, ct);
-
-            Assert.NotNull(hoverResponse);
-            Assert.Null(hoverResponse["error"]);
-            Assert.NotNull(hoverResponse["result"]);
-            var hoverText = hoverResponse["result"]!.ToJsonString();
-            Assert.Contains("string ServiceAClient.GetStatus", hoverText);
-            Assert.Contains("SENTINEL_SERVICE_A_GETSTATUS_DOC", hoverText);
-
-            // 6. textDocument/definition at same position
-            var definitionResponse = await client.SendRequestAsync("textDocument/definition", new JsonObject
-            {
-                ["textDocument"] = new JsonObject { ["uri"] = fileUri },
-                ["position"] = new JsonObject { ["line"] = ServiceAClientLine, ["character"] = ServiceAClientChar }
-            }, ct);
-
-            Assert.NotNull(definitionResponse);
-            Assert.Null(definitionResponse["error"]);
-            Assert.NotNull(definitionResponse["result"]);
-            Assert.Contains("/src/ServiceA/", definitionResponse["result"]!.ToJsonString());
-
-            // 7. textDocument/references on the ServiceAClient class declaration — proves
-            // cross-project reference resolution: the library declaration plus the
-            // `new ServiceAClient()` usage in the consumer project of the same solution.
-            // No exact-count assertion, since whether Roslyn includes the declaration among
-            // results is version-sensitive.
-            var referencesResponse = await client.SendRequestAsync("textDocument/references", new JsonObject
-            {
-                ["textDocument"] = new JsonObject { ["uri"] = fileUri },
-                ["position"] = new JsonObject { ["line"] = ServiceAClientLine, ["character"] = ServiceAClientChar },
-                ["context"] = new JsonObject { ["includeDeclaration"] = true }
-            }, ct);
-
-            Assert.NotNull(referencesResponse);
-            Assert.Null(referencesResponse["error"]);
-            Assert.NotNull(referencesResponse["result"]);
-            var referencesText = referencesResponse["result"]!.ToJsonString();
-            Assert.Contains("/ServiceA.Api/", referencesText);
-            Assert.Contains("/ServiceA.Consumer/", referencesText);
-
-            // Routing isolation: a ServiceA-scoped request must never surface ServiceB
-            // content — catches a routing bug that broadcasts a scoped request to all servers.
-            Assert.DoesNotContain("ServiceB", hoverText);
-            Assert.DoesNotContain("ServiceB", definitionResponse["result"]!.ToJsonString());
-            Assert.DoesNotContain("ServiceB", referencesText);
-
-            // 8. shutdown
-            var shutdownResponse = await client.SendRequestAsync("shutdown", null, ct);
-            Assert.NotNull(shutdownResponse);
-            Assert.Null(shutdownResponse["error"]);
-
-            // 8. exit
-            await client.SendNotificationAsync("exit", null, ct);
-
-            await process.WaitForExitAsync(ct);
-            Assert.Equal(0, process.ExitCode);
-        }
-        catch
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw;
-        }
+        Assert.NotNull(definitionResponse);
+        Assert.Null(definitionResponse["error"]);
+        Assert.NotNull(definitionResponse["result"]);
+        var definitionText = definitionResponse["result"]!.ToJsonString();
+        Assert.Contains("/src/ServiceA/", definitionText);
+        Assert.DoesNotContain("ServiceB", definitionText);
     }
 
-    public void Dispose() => _fixture.Dispose();
+    [Fact]
+    [Trait("Category", "E2E")]
+    public async Task References_OnClassDeclaration_ReturnsDeclarationAndConsumerUsage()
+    {
+        using var cts = new CancellationTokenSource(Timeout);
+
+        // References on the ServiceAClient class declaration — proves cross-project reference
+        // resolution: the library declaration plus the `new ServiceAClient()` usage in the
+        // consumer project of the same solution. No exact-count assertion, since whether Roslyn
+        // includes the declaration among results is version-sensitive.
+        var referencesResponse = await fixture.Client.SendRequestAsync("textDocument/references", new JsonObject
+        {
+            ["textDocument"] = new JsonObject { ["uri"] = fixture.ServiceAApiUri },
+            ["position"] = new JsonObject { ["line"] = ServiceAClientLine, ["character"] = ServiceAClientChar },
+            ["context"] = new JsonObject { ["includeDeclaration"] = true }
+        }, cts.Token);
+
+        Assert.NotNull(referencesResponse);
+        Assert.Null(referencesResponse["error"]);
+        Assert.NotNull(referencesResponse["result"]);
+        var referencesText = referencesResponse["result"]!.ToJsonString();
+        Assert.Contains("/ServiceA.Api/", referencesText);
+        Assert.Contains("/ServiceA.Consumer/", referencesText);
+        Assert.DoesNotContain("ServiceB", referencesText);
+    }
+
+    [Fact]
+    [Trait("Category", "E2E")]
+    public async Task DocumentSymbol_OnApiFile_ReturnsFileSymbolsScopedToServiceA()
+    {
+        using var cts = new CancellationTokenSource(Timeout);
+
+        var documentSymbolResponse = await fixture.Client.SendRequestAsync("textDocument/documentSymbol", new JsonObject
+        {
+            ["textDocument"] = new JsonObject { ["uri"] = fixture.ServiceAApiUri }
+        }, cts.Token);
+
+        Assert.NotNull(documentSymbolResponse);
+        Assert.Null(documentSymbolResponse["error"]);
+        Assert.NotNull(documentSymbolResponse["result"]);
+        var symbolText = documentSymbolResponse["result"]!.ToJsonString();
+        Assert.Contains("ServiceAClient", symbolText);
+        Assert.Contains("GetStatus", symbolText);
+        Assert.DoesNotContain("ServiceB", symbolText);
+    }
 }

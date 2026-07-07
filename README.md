@@ -22,6 +22,16 @@ In a mono-repo with many `.sln` files, a single language server binds to whichev
 - **Cache invalidation** — routing cache refreshes on `.sln`/`.slnx`/`.csproj` changes
 - **Clean shutdown** — all child servers drained on proxy exit
 
+## Supported operations (Claude Code)
+
+- Hover
+- Go to definition
+- Find references
+- Document symbols
+- Workspace symbol search (broadcast + merge across active solutions)
+
+See [CONTEXT.md](./CONTEXT.md) for the authoritative, method-level dispatch table.
+
 ## Installation
 
 ```bash

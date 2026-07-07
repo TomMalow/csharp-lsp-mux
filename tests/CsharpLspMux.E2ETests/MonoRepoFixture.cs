@@ -5,7 +5,7 @@ namespace CsharpLspMux.E2ETests;
 /// obj/ is included so Roslyn can open solutions without a network NuGet restore.
 /// bin/ is excluded (not needed by Roslyn and large).
 /// </summary>
-internal sealed class MonoRepoFixture : IDisposable
+public sealed class MonoRepoFixture : IDisposable
 {
     private static readonly string FixtureSource = Path.GetFullPath(
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "fixtures", "MonoRepo"));

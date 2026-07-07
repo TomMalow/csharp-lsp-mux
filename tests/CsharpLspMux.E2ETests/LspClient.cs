@@ -8,7 +8,7 @@ namespace CsharpLspMux.E2ETests;
 /// <summary>
 /// Thin LSP client over a spawned process's stdin/stdout.
 /// </summary>
-internal sealed class LspClient : IDisposable
+public sealed class LspClient : IDisposable
 {
     private readonly LspTransport _transport;
     private readonly LspFrameReader _reader;
