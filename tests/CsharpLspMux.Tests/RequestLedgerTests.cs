@@ -7,10 +7,10 @@ public class RequestLedgerTests
     private sealed class StubServer : IChildServer
     {
         public ServerReadiness Readiness => ServerReadiness.Ready;
-        public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
-        public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
-        public Task ForwardNotificationAsync(byte[] frame) => Task.CompletedTask;
-        public Task<byte[]> SendAndReceiveAsync(byte[] frame) => Task.FromResult(Array.Empty<byte>());
+        public event Func<Frame, ValueTask>? OnRelayFrame { add { } remove { } }
+        public Task ForwardRequestAsync(Frame frame) => Task.CompletedTask;
+        public Task ForwardNotificationAsync(Frame frame) => Task.CompletedTask;
+        public Task<Frame> SendAndReceiveAsync(Frame frame) => Task.FromResult(Frame.FromJson(new System.Text.Json.Nodes.JsonObject()));
         public Task ShutdownAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

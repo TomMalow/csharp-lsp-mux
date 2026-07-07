@@ -18,7 +18,7 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly MuxLogger? _logger;
     private readonly string? _solutionPath;
 
-    public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame;
+    public event Func<Frame, ValueTask>? OnRelayFrame;
 
     private readonly WorkspaceReadiness _readiness = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -31,7 +31,7 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly Task _readerTask;
     private readonly long _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
 
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<byte[]>> _pending = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<Frame>> _pending = new();
     private int _syntheticIdCounter;
     private int _disposed;
 
@@ -139,44 +139,29 @@ public sealed class RoslynServerProcess : IChildServer
             }
         };
 
-        _ = WriteFrameAsync(SerializeFrame(initRequest));
+        _ = WriteFrameAsync(Frame.FromJson(initRequest));
     }
 
-    public Task ForwardRequestAsync(byte[] frame)
+    public Task ForwardRequestAsync(Frame frame)
     {
-        if (_readiness.Gate(frame, FrameKind.Request) == GateDecision.Queued)
+        if (_readiness.Gate(frame) == GateDecision.Queued)
         {
             if (_logger?.IsDebugEnabled == true)
-            {
-                var (method, id) = ParseFrameLogFields(frame);
-                _logger.Debug($"queued request {method} id={id}");
-            }
+                _logger.Debug($"queued request {frame.Method ?? "?"} id={frame.Id?.ToJsonString() ?? "?"}");
             return Task.CompletedTask;
         }
         return WriteFrameAsync(frame);
     }
 
-    public Task ForwardNotificationAsync(byte[] frame)
+    public Task ForwardNotificationAsync(Frame frame)
     {
-        if (_readiness.Gate(frame, FrameKind.Notification) == GateDecision.Queued)
+        if (_readiness.Gate(frame) == GateDecision.Queued)
         {
             if (_logger?.IsDebugEnabled == true)
-            {
-                var (method, _) = ParseFrameLogFields(frame);
-                _logger.Debug($"queued notification {method}");
-            }
+                _logger.Debug($"queued notification {frame.Method ?? "?"}");
             return Task.CompletedTask;
         }
         return WriteFrameAsync(frame);
-    }
-
-    private static (string Method, string Id) ParseFrameLogFields(byte[] frame)
-    {
-        var msg = JsonSerializer.Deserialize<JsonObject>(frame);
-        return (
-            msg?["method"]?.GetValue<string>() ?? "?",
-            msg?["id"]?.ToJsonString() ?? "?"
-        );
     }
 
     private async Task ReadLoopAsync()
@@ -188,12 +173,12 @@ public sealed class RoslynServerProcess : IChildServer
                 var message = await _reader.ReadFrameAsync(_cts.Token);
                 if (message is null) break;
 
-                var method = message["method"]?.GetValue<string>();
+                var method = message.Method;
 
-                if (method is null && message["id"]?.ToJsonString() == "0" && message["result"] is not null)
+                if (method is null && message.Id?.ToJsonString() == "0" && message.Json["result"] is not null)
                 {
                     var initialized = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "initialized", ["params"] = new JsonObject() };
-                    await WriteFrameAsync(SerializeFrame(initialized));
+                    await WriteFrameAsync(Frame.FromJson(initialized));
                     var initResult = _readiness.Observe(new ReadinessSignal.Initialized());
                     if (_logger?.IsInfoEnabled == true)
                     {
@@ -215,7 +200,7 @@ public sealed class RoslynServerProcess : IChildServer
                                 ["solution"] = new Uri(_solutionPath).AbsoluteUri
                             }
                         };
-                        await WriteFrameAsync(SerializeFrame(solutionOpen));
+                        await WriteFrameAsync(Frame.FromJson(solutionOpen));
                     }
 
                     // Hard timeout: safety net for servers that never emit a readiness signal.
@@ -243,18 +228,17 @@ public sealed class RoslynServerProcess : IChildServer
                 }
 
                 // Intercept responses to send-and-receive calls before relaying.
-                var rawBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-                if (message["id"] is JsonNode idNode && method is null)
+                if (message.Id is JsonNode idNode && method is null)
                 {
                     var idStr = idNode.ToJsonString();
                     if (_pending.TryGetValue(idStr, out var tcs))
                     {
-                        tcs.TrySetResult(rawBytes);
+                        tcs.TrySetResult(message);
                         continue;
                     }
                 }
 
-                if (method == "window/workDoneProgress/create" && message["id"] is JsonNode progressCreateId)
+                if (method == "window/workDoneProgress/create" && message.Id is JsonNode progressCreateId)
                 {
                     var response = new JsonObject
                     {
@@ -262,7 +246,7 @@ public sealed class RoslynServerProcess : IChildServer
                         ["id"] = progressCreateId.DeepClone(),
                         ["result"] = JsonValue.Create<object?>(null)
                     };
-                    await WriteFrameAsync(SerializeFrame(response));
+                    await WriteFrameAsync(Frame.FromJson(response));
                     continue;
                 }
 
@@ -275,8 +259,8 @@ public sealed class RoslynServerProcess : IChildServer
 
                 if (method == "$/progress")
                 {
-                    var token = message["params"]?["token"];
-                    var value = message["params"]?["value"];
+                    var token = message.Json["params"]?["token"];
+                    var value = message.Json["params"]?["value"];
                     var kind = value?["kind"]?.GetValue<string>();
                     if (token is not null && kind is not null)
                     {
@@ -297,7 +281,7 @@ public sealed class RoslynServerProcess : IChildServer
 
                 // Intercept workspace/configuration requests — respond with empty settings so Roslyn
                 // doesn't stall waiting for a client that can't answer server-initiated requests.
-                if (method == "workspace/configuration" && message["id"] is JsonNode configId)
+                if (method == "workspace/configuration" && message.Id is JsonNode configId)
                 {
                     var response = new JsonObject
                     {
@@ -305,18 +289,18 @@ public sealed class RoslynServerProcess : IChildServer
                         ["id"] = configId.DeepClone(),
                         ["result"] = new JsonArray(new JsonObject())
                     };
-                    await WriteFrameAsync(SerializeFrame(response));
+                    await WriteFrameAsync(Frame.FromJson(response));
                     continue;
                 }
 
                 // Relay responses and notifications back to the client (stdout of proxy)
-                if (message["id"] is not null || method is not null)
+                if (message.Id is not null || method is not null)
                 {
                     if (OnRelayFrame is { } relay)
                     {
-                        if (_logger?.IsDebugEnabled == true && method is null && message["id"] is JsonNode relayId)
+                        if (_logger?.IsDebugEnabled == true && method is null && message.Id is JsonNode relayId)
                             _logger.Debug($"relay response id={relayId.ToJsonString()}");
-                        await relay(rawBytes);
+                        await relay(message);
                     }
                     else
                         _logger?.Info($"server {_solutionPath}: no relay subscriber, frame dropped");
@@ -345,14 +329,15 @@ public sealed class RoslynServerProcess : IChildServer
             await WriteFrameAsync(f);
     }
 
-    private async Task WriteFrameAsync(byte[] frame)
+    private async Task WriteFrameAsync(Frame frame)
     {
+        var wire = frame.Wire;
         await _writeLock.WaitAsync();
         try
         {
-            var header = Encoding.UTF8.GetBytes($"Content-Length: {frame.Length}\r\n\r\n");
+            var header = Encoding.UTF8.GetBytes($"Content-Length: {wire.Length}\r\n\r\n");
             await _stdin.WriteAsync(header);
-            await _stdin.WriteAsync(frame);
+            await _stdin.WriteAsync(wire);
             await _stdin.FlushAsync();
         }
         finally
@@ -379,23 +364,18 @@ public sealed class RoslynServerProcess : IChildServer
         }
     }
 
-    private static byte[] SerializeFrame(JsonObject message)
-        => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-
-    public async Task<byte[]> SendAndReceiveAsync(byte[] frame)
+    public async Task<Frame> SendAndReceiveAsync(Frame frame)
     {
         _cts.Token.ThrowIfCancellationRequested();
 
         // Rewrite the request id to a synthetic one so we can correlate the response.
-        var request = JsonSerializer.Deserialize<JsonObject>(frame)!;
         var syntheticId = $"__mux_{Interlocked.Increment(ref _syntheticIdCounter)}";
-        request["id"] = syntheticId;
-        var rewritten = SerializeFrame(request);
+        var rewritten = frame.WithId(syntheticId);
 
         // ToJsonString() preserves the JSON-quoted form that ReadLoopAsync extracts from responses.
-        var pendingKey = request["id"]!.ToJsonString();
+        var pendingKey = rewritten.Id!.ToJsonString();
 
-        var tcs = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<Frame>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[pendingKey] = tcs;
 
         // Cancel the TCS if the server is disposed before a response arrives.
@@ -420,14 +400,14 @@ public sealed class RoslynServerProcess : IChildServer
             ["method"] = "shutdown",
             ["params"] = JsonValue.Create<object?>(null)
         };
-        await WriteFrameAsync(SerializeFrame(shutdown));
+        await WriteFrameAsync(Frame.FromJson(shutdown));
 
         var exit = new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["method"] = "exit"
         };
-        await WriteFrameAsync(SerializeFrame(exit));
+        await WriteFrameAsync(Frame.FromJson(exit));
     }
 
     public async ValueTask DisposeAsync()

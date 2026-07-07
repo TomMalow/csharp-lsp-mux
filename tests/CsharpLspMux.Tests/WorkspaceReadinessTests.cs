@@ -1,13 +1,15 @@
-using System.Text;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace CsharpLspMux.Tests;
 
 public class WorkspaceReadinessTests
 {
-    private static byte[] Frame(string tag) => Encoding.UTF8.GetBytes(tag);
+    private static Frame Req(string tag) => Frame.FromJson(new JsonObject { ["id"] = tag, ["method"] = tag });
 
-    private static string Tag(byte[] frame) => Encoding.UTF8.GetString(frame);
+    private static Frame Notif(string tag) => Frame.FromJson(new JsonObject { ["method"] = tag });
+
+    private static string Tag(Frame frame) => frame.Method!;
 
     // --- Gate matrix ---
 
@@ -16,7 +18,7 @@ public class WorkspaceReadinessTests
     {
         var readiness = new WorkspaceReadiness();
 
-        var decision = readiness.Gate(Frame("r1"), FrameKind.Request);
+        var decision = readiness.Gate(Req("r1"));
 
         Assert.Equal(GateDecision.Queued, decision);
     }
@@ -26,7 +28,7 @@ public class WorkspaceReadinessTests
     {
         var readiness = new WorkspaceReadiness();
 
-        var decision = readiness.Gate(Frame("n1"), FrameKind.Notification);
+        var decision = readiness.Gate(Notif("n1"));
 
         Assert.Equal(GateDecision.Queued, decision);
     }
@@ -37,7 +39,7 @@ public class WorkspaceReadinessTests
         var readiness = new WorkspaceReadiness();
         readiness.Observe(new ReadinessSignal.Initialized());
 
-        var decision = readiness.Gate(Frame("r1"), FrameKind.Request);
+        var decision = readiness.Gate(Req("r1"));
 
         Assert.Equal(GateDecision.Queued, decision);
     }
@@ -48,7 +50,7 @@ public class WorkspaceReadinessTests
         var readiness = new WorkspaceReadiness();
         readiness.Observe(new ReadinessSignal.Initialized());
 
-        var decision = readiness.Gate(Frame("n1"), FrameKind.Notification);
+        var decision = readiness.Gate(Notif("n1"));
 
         Assert.Equal(GateDecision.SendNow, decision);
     }
@@ -60,7 +62,7 @@ public class WorkspaceReadinessTests
         readiness.Observe(new ReadinessSignal.Initialized());
         readiness.Observe(new ReadinessSignal.ProjectInitializationComplete());
 
-        var decision = readiness.Gate(Frame("r1"), FrameKind.Request);
+        var decision = readiness.Gate(Req("r1"));
 
         Assert.Equal(GateDecision.SendNow, decision);
     }
@@ -72,7 +74,7 @@ public class WorkspaceReadinessTests
         readiness.Observe(new ReadinessSignal.Initialized());
         readiness.Observe(new ReadinessSignal.ProjectInitializationComplete());
 
-        var decision = readiness.Gate(Frame("n1"), FrameKind.Notification);
+        var decision = readiness.Gate(Notif("n1"));
 
         Assert.Equal(GateDecision.SendNow, decision);
     }
@@ -124,8 +126,8 @@ public class WorkspaceReadinessTests
     public void Observe_Initialized_DrainsQueuedNotifications_NotRequests()
     {
         var readiness = new WorkspaceReadiness();
-        readiness.Gate(Frame("n1"), FrameKind.Notification);
-        readiness.Gate(Frame("r1"), FrameKind.Request);
+        readiness.Gate(Notif("n1"));
+        readiness.Gate(Req("r1"));
 
         var result = readiness.Observe(new ReadinessSignal.Initialized());
 
@@ -146,9 +148,9 @@ public class WorkspaceReadinessTests
     public void Observe_Initialized_DrainsNotificationsInFifoOrder()
     {
         var readiness = new WorkspaceReadiness();
-        readiness.Gate(Frame("n1"), FrameKind.Notification);
-        readiness.Gate(Frame("n2"), FrameKind.Notification);
-        readiness.Gate(Frame("n3"), FrameKind.Notification);
+        readiness.Gate(Notif("n1"));
+        readiness.Gate(Notif("n2"));
+        readiness.Gate(Notif("n3"));
 
         var result = readiness.Observe(new ReadinessSignal.Initialized());
 
@@ -197,8 +199,8 @@ public class WorkspaceReadinessTests
     {
         var readiness = new WorkspaceReadiness();
         readiness.Observe(new ReadinessSignal.Initialized());
-        readiness.Gate(Frame("r1"), FrameKind.Request);
-        readiness.Gate(Frame("r2"), FrameKind.Request);
+        readiness.Gate(Req("r1"));
+        readiness.Gate(Req("r2"));
 
         var result = readiness.Observe(new ReadinessSignal.ProjectInitializationComplete());
 
@@ -245,7 +247,7 @@ public class WorkspaceReadinessTests
     {
         var readiness = new WorkspaceReadiness();
         readiness.Observe(new ReadinessSignal.Initialized());
-        readiness.Gate(Frame("r1"), FrameKind.Request);
+        readiness.Gate(Req("r1"));
 
         var result = readiness.Observe(new ReadinessSignal.HardTimeoutElapsed());
 
@@ -323,7 +325,7 @@ public class WorkspaceReadinessTests
         var readiness = new WorkspaceReadiness();
         readiness.Observe(new ReadinessSignal.Initialized());
         readiness.Observe(new ReadinessSignal.LoadingBegan("t1"));
-        readiness.Gate(Frame("r1"), FrameKind.Request);
+        readiness.Gate(Req("r1"));
 
         var result = readiness.Observe(new ReadinessSignal.ProgressEnded("t1"));
 
@@ -404,7 +406,7 @@ public class WorkspaceReadinessTests
     {
         var readiness = new WorkspaceReadiness();
         readiness.Observe(new ReadinessSignal.Initialized());
-        readiness.Gate(Frame("r1"), FrameKind.Request);
+        readiness.Gate(Req("r1"));
         var first = readiness.Observe(new ReadinessSignal.ProjectInitializationComplete());
         Assert.Equal(new[] { "r1" }, first.FramesToDrain.Select(Tag));
 

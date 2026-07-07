@@ -7,7 +7,7 @@ public class MuxDispatcherLoggingTests
 {
     private sealed class FakeTransport : IFrameWriter
     {
-        public Task WriteFrameAsync(ReadOnlyMemory<byte> frame, CancellationToken ct = default) => Task.CompletedTask;
+        public Task WriteFrameAsync(Frame frame, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class FakeRouter : ISolutionRouter
@@ -20,10 +20,10 @@ public class MuxDispatcherLoggingTests
     private sealed class FakeServer : IChildServer
     {
         public ServerReadiness Readiness => ServerReadiness.Ready;
-        public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
-        public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
-        public Task ForwardNotificationAsync(byte[] frame) => Task.CompletedTask;
-        public Task<byte[]> SendAndReceiveAsync(byte[] frame) => Task.FromResult(Array.Empty<byte>());
+        public event Func<Frame, ValueTask>? OnRelayFrame { add { } remove { } }
+        public Task ForwardRequestAsync(Frame frame) => Task.CompletedTask;
+        public Task ForwardNotificationAsync(Frame frame) => Task.CompletedTask;
+        public Task<Frame> SendAndReceiveAsync(Frame frame) => Task.FromResult(Frame.FromJson(new JsonObject()));
         public Task ShutdownAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -40,7 +40,7 @@ public class MuxDispatcherLoggingTests
 
     private static string FileUri(string path) => new Uri(path).AbsoluteUri;
 
-    private static JsonObject TextDocMsg(string method, string filePath, int? id = null)
+    private static Frame TextDocMsg(string method, string filePath, int? id = null)
     {
         var o = new JsonObject
         {
@@ -52,7 +52,7 @@ public class MuxDispatcherLoggingTests
             }
         };
         if (id.HasValue) o["id"] = id.Value;
-        return o;
+        return Frame.FromJson(o);
     }
 
     [Fact]
@@ -157,10 +157,10 @@ public class MuxDispatcherLoggingTests
     private sealed class NotInitializedFakeServer : IChildServer
     {
         public ServerReadiness Readiness => ServerReadiness.Starting;
-        public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
-        public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
-        public Task ForwardNotificationAsync(byte[] frame) => Task.CompletedTask;
-        public Task<byte[]> SendAndReceiveAsync(byte[] frame) => Task.FromResult(Array.Empty<byte>());
+        public event Func<Frame, ValueTask>? OnRelayFrame { add { } remove { } }
+        public Task ForwardRequestAsync(Frame frame) => Task.CompletedTask;
+        public Task ForwardNotificationAsync(Frame frame) => Task.CompletedTask;
+        public Task<Frame> SendAndReceiveAsync(Frame frame) => Task.FromResult(Frame.FromJson(new JsonObject()));
         public Task ShutdownAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

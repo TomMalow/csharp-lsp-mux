@@ -8,15 +8,15 @@ public interface IChildServer : IAsyncDisposable
     /// Fired by the server's read loop for every frame that must be relayed to the client.
     /// Subscribers wire this to the client transport at the composition root.
     /// </summary>
-    event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame;
+    event Func<Frame, ValueTask>? OnRelayFrame;
     /// <summary>Forwards a request (has an id) to the child server. Gates on <see cref="ServerReadiness.Ready"/>.</summary>
-    Task ForwardRequestAsync(byte[] frame);
+    Task ForwardRequestAsync(Frame frame);
     /// <summary>Forwards a notification (no id) to the child server. Gates on <see cref="ServerReadiness.Initialized"/>.</summary>
-    Task ForwardNotificationAsync(byte[] frame);
+    Task ForwardNotificationAsync(Frame frame);
     /// <summary>
-    /// Sends a request and returns the raw response frame. Used for workspace/symbol broadcast.
+    /// Sends a request and returns the response frame. Used for workspace/symbol broadcast.
     /// </summary>
-    Task<byte[]> SendAndReceiveAsync(byte[] frame);
+    Task<Frame> SendAndReceiveAsync(Frame frame);
     /// <summary>Sends LSP shutdown/exit to the child process and waits for it to stop.</summary>
     Task ShutdownAsync();
 }

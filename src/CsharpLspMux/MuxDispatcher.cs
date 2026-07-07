@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -30,9 +29,9 @@ public sealed class MuxDispatcher
         pool.OnEviction = s => { NotifyEviction(s); return Task.CompletedTask; };
     }
 
-    public Task<bool> HandleMessageAsync(JsonObject message)
+    public Task<bool> HandleMessageAsync(Frame message)
     {
-        var method = message["method"]?.GetValue<string>();
+        var method = message.Method;
         return method switch
         {
             "initialize" => HandleInitialize(message),
@@ -48,9 +47,9 @@ public sealed class MuxDispatcher
         };
     }
 
-    private async Task<bool> HandleInitialize(JsonObject message)
+    private async Task<bool> HandleInitialize(Frame message)
     {
-        var id = message["id"];
+        var id = message.Id;
         await _transport.SendResponseAsync(id, new JsonObject
         {
             ["capabilities"] = new JsonObject
@@ -86,10 +85,10 @@ public sealed class MuxDispatcher
         return true;
     }
 
-    private async Task<bool> HandleTextDocument(JsonObject message)
+    private async Task<bool> HandleTextDocument(Frame message)
     {
-        var method = message["method"]?.GetValue<string>();
-        var uri = message["params"]?["textDocument"]?["uri"]?.GetValue<string>();
+        var method = message.Method;
+        var uri = message.Json["params"]?["textDocument"]?["uri"]?.GetValue<string>();
         if (uri is not null
             && Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri)
             && parsedUri.IsFile)
@@ -107,30 +106,29 @@ public sealed class MuxDispatcher
                     _logger.Info($"route {method} → {solutionPath} (server: {state})");
                 }
 
-                var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
                 if (method == "textDocument/didClose")
                 {
                     _tracker.MarkClosed(server, uri);
-                    await server.ForwardNotificationAsync(raw);
+                    await server.ForwardNotificationAsync(message);
                 }
                 else if (method == "textDocument/didOpen")
                 {
                     _tracker.MarkOpened(server, uri);
-                    await server.ForwardNotificationAsync(raw);
+                    await server.ForwardNotificationAsync(message);
                 }
                 else
                 {
-                    if (message["id"] is not null && !_tracker.IsOpened(server, uri))
+                    if (message.Id is not null && !_tracker.IsOpened(server, uri))
                         await EnsureOpenAsync(server, uri, filePath);
-                    if (message["id"] is JsonNode requestId)
+                    if (message.Id is JsonNode requestId)
                         _ledger.Register(JsonNodeToKey(requestId), server);
-                    await server.ForwardRequestAsync(raw);
+                    await server.ForwardRequestAsync(message);
                 }
             }
             else
             {
                 _logger?.Info($"SolutionRouter: no solution found for {filePath}");
-                if (message["id"] is JsonNode requestId)
+                if (message.Id is JsonNode requestId)
                     await _transport.SendErrorAsync(requestId, -32001, $"No solution found for file: {filePath}");
             }
         }
@@ -159,14 +157,13 @@ public sealed class MuxDispatcher
                 }
             }
         };
-        var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(didOpen));
-        await server.ForwardNotificationAsync(raw);
+        await server.ForwardNotificationAsync(Frame.FromJson(didOpen));
         _tracker.MarkOpened(server, uri);
     }
 
-    private async Task<bool> HandleCancelRequest(JsonObject message)
+    private async Task<bool> HandleCancelRequest(Frame message)
     {
-        var cancelId = message["params"]?["id"];
+        var cancelId = message.Json["params"]?["id"];
         if (cancelId is not null)
         {
             var key = JsonNodeToKey(cancelId);
@@ -174,17 +171,15 @@ public sealed class MuxDispatcher
             if (owner is not null)
             {
                 _ledger.Remove(key);
-                var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-                await owner.ForwardRequestAsync(raw);
+                await owner.ForwardRequestAsync(message);
             }
         }
         return true;
     }
 
-    private async Task<bool> HandleWorkspaceSymbol(JsonObject message)
+    private async Task<bool> HandleWorkspaceSymbol(Frame message)
     {
-        var requestId = message["id"];
-        var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+        var requestId = message.Id;
         var servers = _pool.ActiveServers.ToList();
 
         if (servers.Count == 0)
@@ -196,7 +191,7 @@ public sealed class MuxDispatcher
         {
             var responses = await Task.WhenAll(servers.Select(async s =>
             {
-                try { return await s.SendAndReceiveAsync(raw); }
+                try { return await s.SendAndReceiveAsync(message); }
                 catch { return null; }
             }));
             var merged = new JsonArray();
@@ -205,8 +200,7 @@ public sealed class MuxDispatcher
                 if (resp is null) continue;
                 try
                 {
-                    var parsed = JsonSerializer.Deserialize<JsonObject>(resp);
-                    if (parsed?["result"] is JsonArray arr)
+                    if (resp.Json["result"] is JsonArray arr)
                         foreach (var item in arr)
                             merged.Add(item?.DeepClone());
                 }
@@ -218,17 +212,16 @@ public sealed class MuxDispatcher
         return true;
     }
 
-    private async Task<bool> HandleDidChangeConfiguration(JsonObject message)
+    private async Task<bool> HandleDidChangeConfiguration(Frame message)
     {
-        var raw = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
         foreach (var server in _pool.ActiveServers.ToList())
-            await server.ForwardRequestAsync(raw);
+            await server.ForwardRequestAsync(message);
         return true;
     }
 
-    private Task<bool> HandleDidChangeWatchedFiles(JsonObject message)
+    private Task<bool> HandleDidChangeWatchedFiles(Frame message)
     {
-        var changes = message["params"]?["changes"]?.AsArray();
+        var changes = message.Json["params"]?["changes"]?.AsArray();
         if (changes is not null)
         {
             foreach (var change in changes)
@@ -246,16 +239,16 @@ public sealed class MuxDispatcher
         return Task.FromResult(true);
     }
 
-    private async Task<bool> HandleShutdown(JsonObject message)
+    private async Task<bool> HandleShutdown(Frame message)
     {
-        var id = message["id"];
+        var id = message.Id;
         await _pool.DisposeAllAsync();
         _poolDrained = true;
         await _transport.SendResponseAsync(id, JsonValue.Create<object?>(null)!);
         return true;
     }
 
-    private async Task<bool> HandleExit(JsonObject message)
+    private async Task<bool> HandleExit(Frame message)
     {
         if (!_poolDrained)
             await _pool.DisposeAllAsync();

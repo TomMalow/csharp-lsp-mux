@@ -13,13 +13,13 @@ public class RoslynServerProcessTests
     /// </summary>
     private sealed class FakeFrameReader : IFrameReader, IDisposable
     {
-        private readonly System.Threading.Channels.Channel<JsonObject?> _channel =
-            System.Threading.Channels.Channel.CreateUnbounded<JsonObject?>();
+        private readonly System.Threading.Channels.Channel<Frame?> _channel =
+            System.Threading.Channels.Channel.CreateUnbounded<Frame?>();
 
-        public void Enqueue(JsonObject frame) => _channel.Writer.TryWrite(frame);
+        public void Enqueue(JsonObject frame) => _channel.Writer.TryWrite(Frame.FromJson(frame));
         public void Complete() => _channel.Writer.Complete();
 
-        public async Task<JsonObject?> ReadFrameAsync(CancellationToken ct = default)
+        public async Task<Frame?> ReadFrameAsync(CancellationToken ct = default)
             => await _channel.Reader.ReadAsync(ct);
 
         public void Dispose() => Complete();
@@ -30,9 +30,9 @@ public class RoslynServerProcessTests
         private readonly System.Threading.Channels.Channel<byte[]> _channel =
             System.Threading.Channels.Channel.CreateUnbounded<byte[]>();
 
-        public Task WriteFrameAsync(ReadOnlyMemory<byte> frame, CancellationToken ct = default)
+        public Task WriteFrameAsync(Frame frame, CancellationToken ct = default)
         {
-            _channel.Writer.TryWrite(frame.ToArray());
+            _channel.Writer.TryWrite(frame.Wire.ToArray());
             return Task.CompletedTask;
         }
 
@@ -54,8 +54,7 @@ public class RoslynServerProcessTests
         }
     }
 
-    private static byte[] MakeFrame(JsonObject obj)
-        => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(obj));
+    private static Frame MakeFrame(JsonObject obj) => Frame.FromJson(obj);
 
     /// <summary>
     /// Parses all sequential Content-Length-framed JSON messages out of a raw byte buffer,
@@ -201,8 +200,7 @@ public class RoslynServerProcessTests
         reader.Enqueue(MakeResponse("__mux_1"));
 
         var result = await receiveTask.WaitAsync(ct);
-        var parsed = JsonSerializer.Deserialize<JsonObject>(result)!;
-        Assert.Equal("__mux_1", parsed["id"]!.GetValue<string>());
+        Assert.Equal("__mux_1", result.Id!.GetValue<string>());
 
         reader.Complete();
     }
@@ -279,7 +277,7 @@ public class RoslynServerProcessTests
         var relayedFrames = new List<byte[]>();
         var stdin = new MemoryStream();
         await using var server = RoslynServerProcess.CreateForTest(stdin, reader);
-        server.OnRelayFrame += frame => { relayedFrames.Add(frame.ToArray()); return ValueTask.CompletedTask; };
+        server.OnRelayFrame += frame => { relayedFrames.Add(frame.Wire.ToArray()); return ValueTask.CompletedTask; };
 
         reader.Enqueue(MakeInitializeResponse());
         await Task.Delay(20, ct);

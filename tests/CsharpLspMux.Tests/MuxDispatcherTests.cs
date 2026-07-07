@@ -13,9 +13,9 @@ public class MuxDispatcherTests
     {
         public readonly List<byte[]> WrittenFrames = new();
 
-        public Task WriteFrameAsync(ReadOnlyMemory<byte> frame, CancellationToken ct = default)
+        public Task WriteFrameAsync(Frame frame, CancellationToken ct = default)
         {
-            WrittenFrames.Add(frame.ToArray());
+            WrittenFrames.Add(frame.Wire.ToArray());
             return Task.CompletedTask;
         }
 
@@ -52,27 +52,26 @@ public class MuxDispatcherTests
         public readonly List<byte[]> NotificationFrames = new();
         public Func<byte[], byte[]>? SendAndReceiveHandler { get; set; }
         public ServerReadiness Readiness { get; set; } = ServerReadiness.Ready;
-        public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
+        public event Func<Frame, ValueTask>? OnRelayFrame { add { } remove { } }
 
-        public Task ForwardRequestAsync(byte[] frame) { ForwardedFrames.Add(frame); return Task.CompletedTask; }
-        public Task ForwardNotificationAsync(byte[] frame) { NotificationFrames.Add(frame); return Task.CompletedTask; }
+        public Task ForwardRequestAsync(Frame frame) { ForwardedFrames.Add(frame.Wire.ToArray()); return Task.CompletedTask; }
+        public Task ForwardNotificationAsync(Frame frame) { NotificationFrames.Add(frame.Wire.ToArray()); return Task.CompletedTask; }
 
-        public Task<byte[]> SendAndReceiveAsync(byte[] frame)
+        public Task<Frame> SendAndReceiveAsync(Frame frame)
         {
             if (SendAndReceiveHandler is not null)
             {
-                try { return Task.FromResult(SendAndReceiveHandler(frame)); }
-                catch (Exception ex) { return Task.FromException<byte[]>(ex); }
+                try { return Task.FromResult(Frame.FromWire(SendAndReceiveHandler(frame.Wire.ToArray()))); }
+                catch (Exception ex) { return Task.FromException<Frame>(ex); }
             }
-            var req = JsonSerializer.Deserialize<JsonObject>(frame)!;
-            var id = req["id"];
+            var id = frame.Id;
             var resp = new JsonObject
             {
                 ["jsonrpc"] = "2.0",
                 ["id"] = id?.DeepClone(),
                 ["result"] = new JsonArray()
             };
-            return Task.FromResult(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(resp)));
+            return Task.FromResult(Frame.FromJson(resp));
         }
 
         public Task ShutdownAsync() => Task.CompletedTask;
@@ -114,12 +113,12 @@ public class MuxDispatcherTests
         return (dispatcher, transport, router, pool);
     }
 
-    private static JsonObject Msg(string method, JsonNode? id = null, JsonObject? @params = null)
+    private static Frame Msg(string method, JsonNode? id = null, JsonObject? @params = null)
     {
         var o = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method };
         if (id is not null) o["id"] = id.DeepClone();
         if (@params is not null) o["params"] = @params.DeepClone();
-        return o;
+        return Frame.FromJson(o);
     }
 
     private static string FileUri(string path) => new Uri(path).AbsoluteUri;
@@ -317,7 +316,7 @@ public class MuxDispatcherTests
     public async Task WorkspaceDidChangeWatchedFiles_SlnChange_CallsNotifyFileChanged()
     {
         var (dispatcher, _, router, _) = Make();
-        var msg = new JsonObject
+        var msg = Frame.FromJson(new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["method"] = "workspace/didChangeWatchedFiles",
@@ -328,7 +327,7 @@ public class MuxDispatcherTests
                     new JsonObject { ["uri"] = FileUri("/repo/App.sln"), ["type"] = JsonValue.Create(2) }
                 }
             }
-        };
+        });
 
         var result = await dispatcher.HandleMessageAsync(msg);
 
@@ -410,7 +409,7 @@ public class MuxDispatcherTests
     public async Task WorkspaceDidChangeWatchedFiles_NonFileUri_DoesNotInvalidate()
     {
         var (dispatcher, _, router, _) = Make();
-        var msg = new JsonObject
+        var msg = Frame.FromJson(new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["method"] = "workspace/didChangeWatchedFiles",
@@ -421,7 +420,7 @@ public class MuxDispatcherTests
                     new JsonObject { ["uri"] = "untitled:Untitled-1", ["type"] = JsonValue.Create(1) }
                 }
             }
-        };
+        });
 
         var result = await dispatcher.HandleMessageAsync(msg);
 
@@ -670,12 +669,12 @@ public class MuxDispatcherTests
         await pool.GetOrAddAsync(sln1);
         await pool.GetOrAddAsync(sln2);
 
-        var msg = new JsonObject
+        var msg = Frame.FromJson(new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["method"] = "workspace/didChangeConfiguration",
             ["params"] = new JsonObject()
-        };
+        });
 
         var result = await dispatcher.HandleMessageAsync(msg);
 

@@ -15,14 +15,15 @@ public sealed class LspTransport : IFrameWriter
         _writeStream = writeStream;
     }
 
-    public async Task WriteFrameAsync(ReadOnlyMemory<byte> frame, CancellationToken ct = default)
+    public async Task WriteFrameAsync(Frame frame, CancellationToken ct = default)
     {
-        var header = Encoding.UTF8.GetBytes($"Content-Length: {frame.Length}\r\n\r\n");
+        var wire = frame.Wire;
+        var header = Encoding.UTF8.GetBytes($"Content-Length: {wire.Length}\r\n\r\n");
         await _writeLock.WaitAsync(ct);
         try
         {
             await _writeStream.WriteAsync(header, ct);
-            await _writeStream.WriteAsync(frame, ct);
+            await _writeStream.WriteAsync(wire, ct);
             await _writeStream.FlushAsync(ct);
         }
         finally

@@ -26,8 +26,7 @@ internal sealed class LspClient : IDisposable
         var message = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["method"] = method };
         if (@params is not null)
             message["params"] = @params;
-        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-        await _transport.WriteFrameAsync(bytes);
+        await _transport.WriteFrameAsync(Frame.FromJson(message));
         return await ReadResponseAsync(id, ct);
     }
 
@@ -36,8 +35,7 @@ internal sealed class LspClient : IDisposable
         var message = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method };
         if (@params is not null)
             message["params"] = @params;
-        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
-        await _transport.WriteFrameAsync(bytes);
+        await _transport.WriteFrameAsync(Frame.FromJson(message));
     }
 
     private async Task<JsonObject?> ReadResponseAsync(int expectedId, CancellationToken ct)
@@ -47,10 +45,10 @@ internal sealed class LspClient : IDisposable
             var frame = await _reader.ReadFrameAsync(ct);
             if (frame is null) return null;
             // Skip notifications (no id) and server-initiated requests (id + method)
-            if (frame["id"] is null) continue;
-            if (frame["method"] is not null) continue;
+            if (frame.Id is null) continue;
+            if (frame.Method is not null) continue;
             // JSON round-trip deserialises numbers as long; compare via ToJsonString to avoid type mismatch
-            if (frame["id"]?.ToJsonString() == expectedId.ToString()) return frame;
+            if (frame.Id?.ToJsonString() == expectedId.ToString()) return frame.Json;
         }
     }
 

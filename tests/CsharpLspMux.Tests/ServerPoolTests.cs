@@ -15,25 +15,23 @@ public sealed class ServerPoolTests
         public int ShutdownBeforeDisposeCount;
         public byte[]? LastSentFrame;
         public ServerReadiness Readiness => ServerReadiness.Ready;
-        public event Func<ReadOnlyMemory<byte>, ValueTask>? OnRelayFrame { add { } remove { } }
+        public event Func<Frame, ValueTask>? OnRelayFrame { add { } remove { } }
 
-        public Task ForwardRequestAsync(byte[] frame) => Task.CompletedTask;
-        public Task ForwardNotificationAsync(byte[] frame) => Task.CompletedTask;
+        public Task ForwardRequestAsync(Frame frame) => Task.CompletedTask;
+        public Task ForwardNotificationAsync(Frame frame) => Task.CompletedTask;
 
-        public Task<byte[]> SendAndReceiveAsync(byte[] frame)
+        public Task<Frame> SendAndReceiveAsync(Frame frame)
         {
-            LastSentFrame = frame;
+            LastSentFrame = frame.Wire.ToArray();
             // Echo back a minimal JSON-RPC result response with same id
-            var req = System.Text.Json.JsonSerializer.Deserialize<JsonObject>(frame)!;
-            var id = req["id"];
+            var id = frame.Id;
             var resp = new JsonObject
             {
                 ["jsonrpc"] = "2.0",
                 ["id"] = id?.DeepClone(),
                 ["result"] = new System.Text.Json.Nodes.JsonArray()
             };
-            var body = Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(resp));
-            return Task.FromResult(body);
+            return Task.FromResult(Frame.FromJson(resp));
         }
 
         public Task ShutdownAsync()
@@ -120,12 +118,11 @@ public sealed class ServerPoolTests
         var pool = MakePool(10);
         var server = await pool.GetOrAddAsync("slnA");
 
-        var req = Encoding.UTF8.GetBytes("""{"jsonrpc":"2.0","id":42,"method":"workspace/symbol","params":{"query":"Foo"}}""");
+        var req = Frame.FromWire(Encoding.UTF8.GetBytes("""{"jsonrpc":"2.0","id":42,"method":"workspace/symbol","params":{"query":"Foo"}}"""));
         var response = await server.SendAndReceiveAsync(req);
 
         Assert.NotNull(response);
-        var parsed = System.Text.Json.JsonSerializer.Deserialize<JsonObject>(response)!;
-        Assert.Equal(42, parsed["id"]?.GetValue<int>());
+        Assert.Equal(42, response.Json["id"]?.GetValue<int>());
     }
 
     [Fact]

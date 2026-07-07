@@ -15,7 +15,7 @@ public class LspTransportTests
         using var output = new MemoryStream();
         var transport = new LspTransport(output);
 
-        await transport.WriteFrameAsync(body, TestContext.Current.CancellationToken);
+        await transport.WriteFrameAsync(Frame.FromWire(body), TestContext.Current.CancellationToken);
 
         output.Position = 0;
         var written = Encoding.UTF8.GetString(output.ToArray());

@@ -1,12 +1,5 @@
 namespace CsharpLspMux;
 
-/// <summary>Whether an outbound frame is a request (has an id) or a notification.</summary>
-public enum FrameKind
-{
-    Request,
-    Notification,
-}
-
 /// <summary>Whether <see cref="WorkspaceReadiness.Gate"/> allows a frame through immediately or queues it.</summary>
 public enum GateDecision
 {
@@ -44,7 +37,7 @@ public abstract record ReadinessSignal
 /// <summary>Result of <see cref="WorkspaceReadiness.Observe"/>: what happened, and frames to write outside the lock.</summary>
 public readonly record struct ObserveResult(
     ReadinessTransition Transition,
-    IReadOnlyList<byte[]> FramesToDrain);
+    IReadOnlyList<Frame> FramesToDrain);
 
 /// <summary>
 /// Pure decision module for the child-server readiness state machine (<c>Starting → Initialized → Ready</c>).
@@ -55,26 +48,27 @@ public sealed class WorkspaceReadiness
 {
     private readonly object _lock = new();
     private ServerReadiness _state = ServerReadiness.Starting;
-    private readonly List<byte[]> _pendingNotifications = new();
-    private readonly List<byte[]> _pendingRequests = new();
+    private readonly List<Frame> _pendingNotifications = new();
+    private readonly List<Frame> _pendingRequests = new();
     private readonly HashSet<string> _loadingTokens = new();
     private bool _seenLoadingToken;
 
     public ServerReadiness State { get { lock (_lock) return _state; } }
 
     /// <summary>
-    /// Decides whether an outbound frame may be sent now, given its <paramref name="kind"/> and the
-    /// current state. A queued frame is stashed and returned later by <see cref="Observe"/>.
+    /// Decides whether an outbound frame may be sent now, given the current state. A request
+    /// waits for <see cref="ServerReadiness.Ready"/>; a notification waits for <see cref="ServerReadiness.Initialized"/>.
+    /// A queued frame is stashed and returned later by <see cref="Observe"/>.
     /// </summary>
-    public GateDecision Gate(byte[] frame, FrameKind kind)
+    public GateDecision Gate(Frame frame)
     {
         lock (_lock)
         {
-            var requiredState = kind == FrameKind.Request ? ServerReadiness.Ready : ServerReadiness.Initialized;
+            var requiredState = frame.IsRequest ? ServerReadiness.Ready : ServerReadiness.Initialized;
             if (_state >= requiredState)
                 return GateDecision.SendNow;
 
-            (kind == FrameKind.Request ? _pendingRequests : _pendingNotifications).Add(frame);
+            (frame.IsRequest ? _pendingRequests : _pendingNotifications).Add(frame);
             return GateDecision.Queued;
         }
     }
@@ -98,7 +92,7 @@ public sealed class WorkspaceReadiness
     private ObserveResult ObserveInitialized()
     {
         if (_state != ServerReadiness.Starting)
-            return new ObserveResult(ReadinessTransition.None, Array.Empty<byte[]>());
+            return new ObserveResult(ReadinessTransition.None, Array.Empty<Frame>());
 
         _state = ServerReadiness.Initialized;
         var drained = _pendingNotifications.ToArray();
@@ -110,7 +104,7 @@ public sealed class WorkspaceReadiness
     {
         _loadingTokens.Add(signal.Token);
         _seenLoadingToken = true;
-        return new ObserveResult(ReadinessTransition.None, Array.Empty<byte[]>());
+        return new ObserveResult(ReadinessTransition.None, Array.Empty<Frame>());
     }
 
     private ObserveResult ObserveProgressEnded(ReadinessSignal.ProgressEnded signal)
@@ -118,13 +112,13 @@ public sealed class WorkspaceReadiness
         _loadingTokens.Remove(signal.Token);
         if (_loadingTokens.Count == 0 && _seenLoadingToken)
             return TryBecomeReady();
-        return new ObserveResult(ReadinessTransition.None, Array.Empty<byte[]>());
+        return new ObserveResult(ReadinessTransition.None, Array.Empty<Frame>());
     }
 
     private ObserveResult TryBecomeReady()
     {
         if (_state != ServerReadiness.Initialized)
-            return new ObserveResult(ReadinessTransition.None, Array.Empty<byte[]>());
+            return new ObserveResult(ReadinessTransition.None, Array.Empty<Frame>());
 
         _state = ServerReadiness.Ready;
         var drained = _pendingRequests.ToArray();

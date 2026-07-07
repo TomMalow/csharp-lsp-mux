@@ -29,7 +29,7 @@ public class LspFrameReaderTests
         var result = await reader.ReadFrameAsync(CancellationToken.None);
 
         Assert.NotNull(result);
-        Assert.Equal("initialized", result["method"]?.GetValue<string>());
+        Assert.Equal("initialized", result.Method);
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class LspFrameReaderTests
         var result = await reader.ReadFrameAsync(CancellationToken.None);
 
         Assert.NotNull(result);
-        Assert.Equal(1, result["id"]?.GetValue<int>());
+        Assert.Equal(1, result.Id?.GetValue<int>());
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class LspFrameReaderTests
         var pipe = new MemoryStream();
         var transport = new LspTransport(pipe);
         var original = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "$/ping" };
-        var frame = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(original));
+        var frame = Frame.FromJson(original);
 
         await transport.WriteFrameAsync(frame, TestContext.Current.CancellationToken);
         pipe.Position = 0;
@@ -76,6 +76,6 @@ public class LspFrameReaderTests
         var result = await reader.ReadFrameAsync(CancellationToken.None);
 
         Assert.NotNull(result);
-        Assert.Equal("$/ping", result["method"]?.GetValue<string>());
+        Assert.Equal("$/ping", result.Method);
     }
 }

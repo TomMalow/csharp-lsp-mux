@@ -1,6 +1,4 @@
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 
 namespace CsharpLspMux;
 
@@ -13,7 +11,7 @@ public sealed class LspFrameReader : IFrameReader
         _stream = stream;
     }
 
-    public async Task<JsonObject?> ReadFrameAsync(CancellationToken ct = default)
+    public async Task<Frame?> ReadFrameAsync(CancellationToken ct = default)
     {
         int contentLength = -1;
 
@@ -38,7 +36,7 @@ public sealed class LspFrameReader : IFrameReader
             totalRead += read;
         }
 
-        return JsonSerializer.Deserialize<JsonObject>(buffer);
+        return Frame.FromWire(buffer);
     }
 
     private static async Task<string?> ReadLineAsync(Stream stream, CancellationToken ct)
