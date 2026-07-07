@@ -119,27 +119,7 @@ public sealed class RoslynServerProcess : IChildServer
             {
                 ["processId"] = Environment.ProcessId,
                 ["rootUri"] = new Uri(solutionDir).AbsoluteUri,
-                ["capabilities"] = new JsonObject
-                {
-                    ["workspace"] = new JsonObject
-                    {
-                        ["symbol"] = new JsonObject { ["dynamicRegistration"] = false }
-                    },
-                    ["textDocument"] = new JsonObject
-                    {
-                        ["synchronization"] = new JsonObject { ["dynamicRegistration"] = false },
-                        ["hover"] = new JsonObject { ["dynamicRegistration"] = false },
-                        ["definition"] = new JsonObject { ["dynamicRegistration"] = false },
-                        ["references"] = new JsonObject { ["dynamicRegistration"] = false },
-                        ["documentSymbol"] = new JsonObject { ["dynamicRegistration"] = false },
-                        ["completion"] = new JsonObject { ["dynamicRegistration"] = false },
-                        ["signatureHelp"] = new JsonObject { ["dynamicRegistration"] = false },
-                        ["rename"] = new JsonObject { ["dynamicRegistration"] = false },
-                        ["codeAction"] = new JsonObject { ["dynamicRegistration"] = false },
-                        ["diagnostic"] = new JsonObject { ["dynamicRegistration"] = false }
-                    },
-                    ["window"] = new JsonObject { ["workDoneProgress"] = true }
-                }
+                ["capabilities"] = Capabilities.BuildRoslynFacingCapabilities()
             }
         };
 
