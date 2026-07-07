@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -34,6 +35,9 @@ public sealed class RoslynServerProcess : IChildServer
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Frame>> _pending = new();
     private int _syntheticIdCounter;
     private int _disposed;
+    // Cleared the moment the id==0 initialize response is observed; guards InboundClassifier's
+    // recognition of that response so a later, unrelated id==0 frame isn't misread as it.
+    private bool _awaitingInitialize = true;
 
     public ServerReadiness Readiness => _readiness.State;
 
@@ -173,138 +177,8 @@ public sealed class RoslynServerProcess : IChildServer
                 var message = await _reader.ReadFrameAsync(_cts.Token);
                 if (message is null) break;
 
-                var method = message.Method;
-
-                if (method is null && message.Id?.ToJsonString() == "0" && message.Json["result"] is not null)
-                {
-                    var initialized = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "initialized", ["params"] = new JsonObject() };
-                    await WriteFrameAsync(Frame.FromJson(initialized));
-                    var initResult = _readiness.Observe(new ReadinessSignal.Initialized());
-                    if (_logger?.IsInfoEnabled == true)
-                    {
-                        var elapsed = (long)(System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds);
-                        _logger.Info($"server {_solutionPath} initialized in {elapsed}ms");
-                    }
-                    _logger?.Debug($"draining {initResult.FramesToDrain.Count} queued notifications");
-                    foreach (var f in initResult.FramesToDrain)
-                        await WriteFrameAsync(f);
-
-                    if (_solutionPath is not null)
-                    {
-                        var solutionOpen = new JsonObject
-                        {
-                            ["jsonrpc"] = "2.0",
-                            ["method"] = "solution/open",
-                            ["params"] = new JsonObject
-                            {
-                                ["solution"] = new Uri(_solutionPath).AbsoluteUri
-                            }
-                        };
-                        await WriteFrameAsync(Frame.FromJson(solutionOpen));
-                    }
-
-                    // Hard timeout: safety net for servers that never emit a readiness signal.
-                    // _readyCts disarms it the moment the real signal arrives, so a healthy
-                    // server neither logs nor runs this — reaching past the delay genuinely
-                    // means the workspace never finished loading.
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, _readyCts.Token);
-                            await Task.Delay(_hardTimeoutMs, linked.Token);
-                            var result = _readiness.Observe(new ReadinessSignal.HardTimeoutElapsed());
-                            if (result.Transition == ReadinessTransition.BecameReady)
-                            {
-                                _logger?.Info($"workspace load timeout ({_hardTimeoutMs}ms) fired as fallback, forwarding {result.FramesToDrain.Count} queued requests");
-                                _logger?.Debug("workspace ready via hard timeout");
-                            }
-                            await ApplyBecameReady(result);
-                        }
-                        catch (OperationCanceledException) { }
-                    });
-
-                    continue;
-                }
-
-                // Intercept responses to send-and-receive calls before relaying.
-                if (message.Id is JsonNode idNode && method is null)
-                {
-                    var idStr = idNode.ToJsonString();
-                    if (_pending.TryGetValue(idStr, out var tcs))
-                    {
-                        tcs.TrySetResult(message);
-                        continue;
-                    }
-                }
-
-                if (method == "window/workDoneProgress/create" && message.Id is JsonNode progressCreateId)
-                {
-                    var response = new JsonObject
-                    {
-                        ["jsonrpc"] = "2.0",
-                        ["id"] = progressCreateId.DeepClone(),
-                        ["result"] = JsonValue.Create<object?>(null)
-                    };
-                    await WriteFrameAsync(Frame.FromJson(response));
-                    continue;
-                }
-
-                if (method == "workspace/projectInitializationComplete")
-                {
-                    _logger?.Info($"server {_solutionPath} received workspace/projectInitializationComplete");
-                    await ApplyBecameReady(_readiness.Observe(new ReadinessSignal.ProjectInitializationComplete()));
-                    continue;
-                }
-
-                if (method == "$/progress")
-                {
-                    var token = message.Json["params"]?["token"];
-                    var value = message.Json["params"]?["value"];
-                    var kind = value?["kind"]?.GetValue<string>();
-                    if (token is not null && kind is not null)
-                    {
-                        var tokenKey = token.ToJsonString();
-                        if (kind == "begin")
-                        {
-                            var title = value?["title"]?.GetValue<string>() ?? "";
-                            if (title.Contains("Loading", StringComparison.OrdinalIgnoreCase))
-                                _readiness.Observe(new ReadinessSignal.LoadingBegan(tokenKey));
-                        }
-                        else if (kind == "end")
-                        {
-                            await ApplyBecameReady(_readiness.Observe(new ReadinessSignal.ProgressEnded(tokenKey)));
-                        }
-                    }
-                    continue;
-                }
-
-                // Intercept workspace/configuration requests — respond with empty settings so Roslyn
-                // doesn't stall waiting for a client that can't answer server-initiated requests.
-                if (method == "workspace/configuration" && message.Id is JsonNode configId)
-                {
-                    var response = new JsonObject
-                    {
-                        ["jsonrpc"] = "2.0",
-                        ["id"] = configId.DeepClone(),
-                        ["result"] = new JsonArray(new JsonObject())
-                    };
-                    await WriteFrameAsync(Frame.FromJson(response));
-                    continue;
-                }
-
-                // Relay responses and notifications back to the client (stdout of proxy)
-                if (message.Id is not null || method is not null)
-                {
-                    if (OnRelayFrame is { } relay)
-                    {
-                        if (_logger?.IsDebugEnabled == true && method is null && message.Id is JsonNode relayId)
-                            _logger.Debug($"relay response id={relayId.ToJsonString()}");
-                        await relay(message);
-                    }
-                    else
-                        _logger?.Info($"server {_solutionPath}: no relay subscriber, frame dropped");
-                }
+                var ctx = new InboundContext(_pending.Keys.ToHashSet(), _awaitingInitialize);
+                await ExecuteAsync(message, InboundClassifier.Classify(message, ctx));
             }
         }
         catch (OperationCanceledException) { }
@@ -312,6 +186,109 @@ public sealed class RoslynServerProcess : IChildServer
         {
             Console.Error.WriteLine($"[RoslynServerProcess] reader error: {ex.Message}");
         }
+    }
+
+    /// <summary>Performs the I/O an <see cref="InboundAction"/> calls for; <paramref name="message"/> supplies the frame the action was computed from.</summary>
+    private async Task ExecuteAsync(Frame message, InboundAction action)
+    {
+        switch (action)
+        {
+            case InboundAction.Signal { Value: ReadinessSignal.Initialized }:
+                _awaitingInitialize = false;
+                await HandleInitializedAsync();
+                break;
+
+            case InboundAction.Signal { Value: ReadinessSignal.ProjectInitializationComplete } signal:
+                _logger?.Info($"server {_solutionPath} received workspace/projectInitializationComplete");
+                await ApplyBecameReady(_readiness.Observe(signal.Value));
+                break;
+
+            case InboundAction.Signal { Value: ReadinessSignal.LoadingBegan } signal:
+                _readiness.Observe(signal.Value);
+                break;
+
+            case InboundAction.Signal { Value: ReadinessSignal.ProgressEnded } signal:
+                await ApplyBecameReady(_readiness.Observe(signal.Value));
+                break;
+
+            case InboundAction.RespondToChild respond:
+                await WriteFrameAsync(respond.Response);
+                break;
+
+            case InboundAction.ResolveCorrelation:
+                if (_pending.TryGetValue(message.Id!.ToJsonString(), out var tcs))
+                    tcs.TrySetResult(message);
+                break;
+
+            case InboundAction.RelayToClient:
+                await RelayAsync(message);
+                break;
+
+            case InboundAction.Drop:
+                break;
+        }
+    }
+
+    private async Task RelayAsync(Frame message)
+    {
+        if (OnRelayFrame is { } relay)
+        {
+            if (_logger?.IsDebugEnabled == true && message.Method is null && message.Id is JsonNode relayId)
+                _logger.Debug($"relay response id={relayId.ToJsonString()}");
+            await relay(message);
+        }
+        else
+            _logger?.Info($"server {_solutionPath}: no relay subscriber, frame dropped");
+    }
+
+    private async Task HandleInitializedAsync()
+    {
+        var initialized = new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "initialized", ["params"] = new JsonObject() };
+        await WriteFrameAsync(Frame.FromJson(initialized));
+        var initResult = _readiness.Observe(new ReadinessSignal.Initialized());
+        if (_logger?.IsInfoEnabled == true)
+        {
+            var elapsed = (long)(System.Diagnostics.Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds);
+            _logger.Info($"server {_solutionPath} initialized in {elapsed}ms");
+        }
+        _logger?.Debug($"draining {initResult.FramesToDrain.Count} queued notifications");
+        foreach (var f in initResult.FramesToDrain)
+            await WriteFrameAsync(f);
+
+        if (_solutionPath is not null)
+        {
+            var solutionOpen = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["method"] = "solution/open",
+                ["params"] = new JsonObject
+                {
+                    ["solution"] = new Uri(_solutionPath).AbsoluteUri
+                }
+            };
+            await WriteFrameAsync(Frame.FromJson(solutionOpen));
+        }
+
+        // Hard timeout: safety net for servers that never emit a readiness signal.
+        // _readyCts disarms it the moment the real signal arrives, so a healthy
+        // server neither logs nor runs this — reaching past the delay genuinely
+        // means the workspace never finished loading.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, _readyCts.Token);
+                await Task.Delay(_hardTimeoutMs, linked.Token);
+                var result = _readiness.Observe(new ReadinessSignal.HardTimeoutElapsed());
+                if (result.Transition == ReadinessTransition.BecameReady)
+                {
+                    _logger?.Info($"workspace load timeout ({_hardTimeoutMs}ms) fired as fallback, forwarding {result.FramesToDrain.Count} queued requests");
+                    _logger?.Debug("workspace ready via hard timeout");
+                }
+                await ApplyBecameReady(result);
+            }
+            catch (OperationCanceledException) { }
+        });
     }
 
     private async Task ApplyBecameReady(ObserveResult result)

@@ -18,6 +18,7 @@ An LSP multiplexer that sits between Claude Code and multiple Roslyn language se
 | **Content-Length framing** | The LSP wire format: `Content-Length: N\r\n\r\n{json}` | Not HTTP — no headers beyond Content-Length |
 | **Child server** | A single `roslyn-language-server` process owned by the pool, bound to one solution | — |
 | **Repo root** | The git working tree root — upper bound for ancestor walks | — |
+| **Inbound classifier** | Pure mirror of `MuxDispatcher`; maps each server→client frame to one inbound-dispatch outcome; the read loop executes the result | — |
 
 ## LSP message dispatch
 
@@ -65,6 +66,16 @@ All `textDocument/*` methods share one routing rule: extract `params.textDocumen
 | Method | Mode | What Claude Code uses it for | Mux behaviour |
 |---|---|---|---|
 | `$/cancelRequest` | Route | Cancel an in-flight request by id | Forwarded to the active server session that registered that correlation id |
+
+## Inbound dispatch (server→client)
+
+Every outbound (client→server) frame goes through `MuxDispatcher.HandleMessageAsync`'s Absorb/Route/Broadcast dispatch. The mirror image — every inbound (server→client) frame a `roslyn-language-server` child sends back — goes through `InboundClassifier.Classify`, a pure function that maps a frame to one of five outcomes; `RoslynServerProcess`'s read loop executes whichever outcome comes back:
+
+- **Relay** — forward the frame to the client unchanged (the common case: responses to routed requests, notifications like `textDocument/publishDiagnostics`)
+- **Auto-respond** — the mux answers a server-initiated request itself, without involving the client (`window/workDoneProgress/create` → `null`; `workspace/configuration` → `[{}]`)
+- **Correlate** — complete a pending `SendAndReceiveAsync` call (used by `workspace/symbol` broadcast) instead of relaying
+- **Signal** — feed a *server session*'s `WorkspaceReadiness` (the id==0 initialize response, `workspace/projectInitializationComplete`, `$/progress` begin/end)
+- **Drop** — neither relayed nor acted on (non-loading or malformed `$/progress` frames)
 
 ### Known gaps
 

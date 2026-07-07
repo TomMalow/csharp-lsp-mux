@@ -438,12 +438,11 @@ public class RoslynServerProcessTests
         reader.Enqueue(configRequest);
         await Task.Delay(100, ct);
 
-        // Response must be written back to the child server (stdin grew), not relayed to the client
+        // Response must be written back to the child server (stdin grew), not relayed to the client.
+        // Response content (id echo, empty-settings result) is InboundClassifier's contract —
+        // covered by InboundClassifierTests.WorkspaceConfiguration_IsRespondToChild_WithEmptySettingsArrayAndEchoedId.
         Assert.True(stdin.Length > stdinLengthAfterInit, "response must be written to child server stdin");
-
-        var stdinContent = Encoding.UTF8.GetString(stdin.ToArray());
-        Assert.Contains("\"id\":99", stdinContent);
-        Assert.Contains("\"result\":[{}]", stdinContent);
+        Assert.False(transport.TryReadNext(out JsonObject? unused), "workspace/configuration must not be forwarded to client");
 
         reader.Complete();
     }
@@ -695,11 +694,10 @@ public class RoslynServerProcessTests
         reader.Enqueue(MakeWorkDoneProgressCreate(10, "token1"));
         await Task.Delay(50, ct);
 
-        // Auto-response written to child server stdin
+        // Auto-response written to child server stdin. Response content (id echo, null result)
+        // is InboundClassifier's contract — covered by
+        // InboundClassifierTests.WorkDoneProgressCreate_IsRespondToChild_WithNullResultAndEchoedId.
         Assert.True(stdin.Length > stdinLengthBefore, "auto-response must be written to child server stdin");
-        var stdinContent = Encoding.UTF8.GetString(stdin.ToArray());
-        Assert.Contains("\"id\":10", stdinContent);
-        Assert.Contains("\"result\":null", stdinContent);
 
         // Must NOT be relayed to client transport
         Assert.False(transport.TryReadNext(out JsonObject? unused), "window/workDoneProgress/create must not be forwarded to client");
