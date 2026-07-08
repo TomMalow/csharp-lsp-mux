@@ -146,22 +146,12 @@ public class InboundClassifierTests
     }
 
     [Fact]
-    public void ProgressBegin_LoadingTitle_IsLoadingBeganSignal()
+    public void ProgressBegin_WithLoadingTitle_IsDrop()
     {
+        // $/progress carries no readiness meaning (ADR-0007) — even a "Loading" title is swallowed.
         var action = InboundClassifier.Classify(MakeFrame(MakeProgressBegin("token1", "Loading workspace...")), Ctx());
 
-        var signal = Assert.IsType<InboundAction.Signal>(action);
-        var loadingBegan = Assert.IsType<ReadinessSignal.LoadingBegan>(signal.Value);
-        Assert.Equal("\"token1\"", loadingBegan.Token);
-    }
-
-    [Fact]
-    public void ProgressBegin_LoadingTitle_IsCaseInsensitive()
-    {
-        var action = InboundClassifier.Classify(MakeFrame(MakeProgressBegin("token1", "LOADING projects")), Ctx());
-
-        var signal = Assert.IsType<InboundAction.Signal>(action);
-        Assert.IsType<ReadinessSignal.LoadingBegan>(signal.Value);
+        Assert.IsType<InboundAction.Drop>(action);
     }
 
     [Fact]
@@ -173,13 +163,11 @@ public class InboundClassifierTests
     }
 
     [Fact]
-    public void ProgressEnd_IsProgressEndedSignal()
+    public void ProgressEnd_IsDrop()
     {
         var action = InboundClassifier.Classify(MakeFrame(MakeProgressEnd("token1")), Ctx());
 
-        var signal = Assert.IsType<InboundAction.Signal>(action);
-        var progressEnded = Assert.IsType<ReadinessSignal.ProgressEnded>(signal.Value);
-        Assert.Equal("\"token1\"", progressEnded.Token);
+        Assert.IsType<InboundAction.Drop>(action);
     }
 
     [Fact]

@@ -21,12 +21,6 @@ public abstract record ReadinessSignal
     /// <summary>The LSP handshake (initialize/initialized) completed.</summary>
     public sealed record Initialized : ReadinessSignal;
 
-    /// <summary>A <c>$/progress</c> "begin" with a "Loading" title arrived for <paramref name="Token"/>.</summary>
-    public sealed record LoadingBegan(string Token) : ReadinessSignal;
-
-    /// <summary>A <c>$/progress</c> "end" arrived for <paramref name="Token"/>.</summary>
-    public sealed record ProgressEnded(string Token) : ReadinessSignal;
-
     /// <summary>The server reported <c>workspace/projectInitializationComplete</c>.</summary>
     public sealed record ProjectInitializationComplete : ReadinessSignal;
 
@@ -50,8 +44,6 @@ public sealed class WorkspaceReadiness
     private ServerReadiness _state = ServerReadiness.Starting;
     private readonly List<Frame> _pendingNotifications = new();
     private readonly List<Frame> _pendingRequests = new();
-    private readonly HashSet<string> _loadingTokens = new();
-    private bool _seenLoadingToken;
 
     public ServerReadiness State { get { lock (_lock) return _state; } }
 
@@ -81,8 +73,6 @@ public sealed class WorkspaceReadiness
             return signal switch
             {
                 ReadinessSignal.Initialized => ObserveInitialized(),
-                ReadinessSignal.LoadingBegan loadingBegan => ObserveLoadingBegan(loadingBegan),
-                ReadinessSignal.ProgressEnded progressEnded => ObserveProgressEnded(progressEnded),
                 ReadinessSignal.ProjectInitializationComplete or ReadinessSignal.HardTimeoutElapsed => TryBecomeReady(),
                 _ => throw new ArgumentOutOfRangeException(nameof(signal), signal, null),
             };
@@ -98,21 +88,6 @@ public sealed class WorkspaceReadiness
         var drained = _pendingNotifications.ToArray();
         _pendingNotifications.Clear();
         return new ObserveResult(ReadinessTransition.BecameInitialized, drained);
-    }
-
-    private ObserveResult ObserveLoadingBegan(ReadinessSignal.LoadingBegan signal)
-    {
-        _loadingTokens.Add(signal.Token);
-        _seenLoadingToken = true;
-        return new ObserveResult(ReadinessTransition.None, Array.Empty<Frame>());
-    }
-
-    private ObserveResult ObserveProgressEnded(ReadinessSignal.ProgressEnded signal)
-    {
-        _loadingTokens.Remove(signal.Token);
-        if (_loadingTokens.Count == 0 && _seenLoadingToken)
-            return TryBecomeReady();
-        return new ObserveResult(ReadinessTransition.None, Array.Empty<Frame>());
     }
 
     private ObserveResult TryBecomeReady()

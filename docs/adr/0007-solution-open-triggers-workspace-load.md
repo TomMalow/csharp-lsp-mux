@@ -52,8 +52,21 @@ Rejected alternatives:
 - **Better result quality, not just latency**: requests hit the fully-loaded project graph instead
   of the miscellaneous-files fallback.
 - **`projectInitializationComplete` is now the authoritative readiness trigger**; the `$/progress`
-  title substring match (`"Loading"`) is secondary and remains fragile — verify Roslyn's actual
-  progress titles before relying on it.
+  title substring match (`"Loading"`) was secondary and fragile — see the #63 update below for its
+  removal.
 - **Coupled to the raw Roslyn server contract**: if the mux ever targets a wrapper server (see
   ADR-0002), the load mechanism must be revisited. A bare `.csproj` target would need `project/open`
   with `{"projects":[uri]}`.
+
+## Update (#63): the `$/progress` loading heuristic was dead weight, and is now removed
+
+A debug log on the `$/progress` branch, run against a real non-trivial `.slnx`, showed **zero**
+`$/progress` frames from `roslyn-language-server` 5.9.0 — `workspace/projectInitializationComplete`
+was the sole readiness trigger in practice. The `"Loading"` title match this ADR called "secondary
+and fragile" never fired.
+
+`LoadingBegan`/`ProgressEnded` (the `ReadinessSignal` cases), the loading-token set, and the
+`_seenLoadingToken` latch were removed from `WorkspaceReadiness`. `InboundClassifier` now drops
+every `$/progress` frame unconditionally instead of inspecting `kind`/`title` to decide. Readiness
+rests on exactly two signals: `ProjectInitializationComplete` (authoritative) and
+`HardTimeoutElapsed` (backstop).

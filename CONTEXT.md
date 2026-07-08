@@ -83,8 +83,8 @@ Every outbound (client→server) frame goes through `MuxDispatcher.HandleMessage
 - **Relay** — forward the frame to the client unchanged (the common case: responses to routed requests, notifications like `textDocument/publishDiagnostics`)
 - **Auto-respond** — the mux answers a server-initiated request itself, without involving the client (`window/workDoneProgress/create` → `null`; `workspace/configuration` → `[{}]`)
 - **Correlate** — complete a pending `SendAndReceiveAsync` call (used by `workspace/symbol` broadcast) instead of relaying
-- **Signal** — feed a *server session*'s `WorkspaceReadiness` (the id==0 initialize response, `workspace/projectInitializationComplete`, `$/progress` begin/end)
-- **Drop** — neither relayed nor acted on (non-loading or malformed `$/progress` frames)
+- **Signal** — feed a *server session*'s `WorkspaceReadiness` (the id==0 initialize response, `workspace/projectInitializationComplete`)
+- **Drop** — neither relayed nor acted on (malformed frames; every `$/progress` frame — see ADR-0007's #63 update, the loading heuristic this used to feed was empirically dead weight and was removed)
 
 ### Known gaps
 

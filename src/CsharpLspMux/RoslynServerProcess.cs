@@ -183,14 +183,6 @@ public sealed class RoslynServerProcess : IChildServer
                 await ApplyBecameReady(_readiness.Observe(signal.Value));
                 break;
 
-            case InboundAction.Signal { Value: ReadinessSignal.LoadingBegan } signal:
-                _readiness.Observe(signal.Value);
-                break;
-
-            case InboundAction.Signal { Value: ReadinessSignal.ProgressEnded } signal:
-                await ApplyBecameReady(_readiness.Observe(signal.Value));
-                break;
-
             case InboundAction.RespondToChild respond:
                 await WriteFrameAsync(respond.Response);
                 break;

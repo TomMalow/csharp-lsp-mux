@@ -65,32 +65,12 @@ public static class InboundClassifier
         if (method == "workspace/projectInitializationComplete")
             return new InboundAction.Signal(new ReadinessSignal.ProjectInitializationComplete());
 
+        // $/progress carries no readiness meaning (see ADR-0007): Roslyn never emits it in
+        // practice, and readiness rests solely on projectInitializationComplete + the hard
+        // timeout. Swallowed rather than relayed, matching the other server-internal notifications above.
         if (method == "$/progress")
-            return ClassifyProgress(frame);
+            return new InboundAction.Drop();
 
         return new InboundAction.RelayToClient();
-    }
-
-    private static InboundAction ClassifyProgress(Frame frame)
-    {
-        var token = frame.Json["params"]?["token"];
-        var value = frame.Json["params"]?["value"];
-        var kind = value?["kind"]?.GetValue<string>();
-        if (token is null || kind is null)
-            return new InboundAction.Drop();
-
-        var tokenKey = token.ToJsonString();
-        if (kind == "begin")
-        {
-            var title = value?["title"]?.GetValue<string>() ?? "";
-            if (title.Contains("Loading", StringComparison.OrdinalIgnoreCase))
-                return new InboundAction.Signal(new ReadinessSignal.LoadingBegan(tokenKey));
-            return new InboundAction.Drop();
-        }
-
-        if (kind == "end")
-            return new InboundAction.Signal(new ReadinessSignal.ProgressEnded(tokenKey));
-
-        return new InboundAction.Drop();
     }
 }
