@@ -653,4 +653,86 @@ public class MuxDispatcherTests
         Assert.Equal("workspace/didChangeConfiguration", forwarded["method"]?.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("callHierarchy/incomingCalls")]
+    [InlineData("callHierarchy/outgoingCalls")]
+    public async Task CallHierarchy_RoutableItemUri_ForwardsToServer_ReturnsTrue(string method)
+    {
+        var sln = "/repo/App.slnx";
+        var (dispatcher, transport, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
+
+        var msg = Msg(method, id: JsonValue.Create(7),
+            @params: new JsonObject { ["item"] = new JsonObject { ["uri"] = FileUri("/repo/src/Foo.cs") } });
+
+        var result = await dispatcher.HandleMessageAsync(msg);
+
+        Assert.True(result);
+        Assert.Single(server.NotificationFrames); // synthesized didOpen
+        Assert.Single(server.ForwardedFrames);    // callHierarchy request
+        var forwarded = JsonSerializer.Deserialize<JsonObject>(server.ForwardedFrames[0])!;
+        Assert.Equal(method, forwarded["method"]?.GetValue<string>());
+        Assert.Empty(transport.Responses);
+    }
+
+    [Theory]
+    [InlineData("callHierarchy/incomingCalls")]
+    [InlineData("callHierarchy/outgoingCalls")]
+    public async Task CallHierarchy_NoSolution_SendsStandardErrorResponse(string method)
+    {
+        var (dispatcher, transport, _, _) = Make(routeResult: null);
+        var msg = Msg(method, id: JsonValue.Create(8),
+            @params: new JsonObject { ["item"] = new JsonObject { ["uri"] = FileUri("/repo/src/Foo.cs") } });
+
+        var result = await dispatcher.HandleMessageAsync(msg);
+
+        Assert.True(result);
+        Assert.Empty(transport.Responses);
+        Assert.Single(transport.Errors);
+        var (id, code, message) = transport.Errors[0];
+        Assert.Equal(8, id?.GetValue<int>());
+        Assert.Equal(-32001, code);
+        Assert.Contains("Foo.cs", message);
+    }
+
+    [Fact]
+    public async Task CallHierarchy_RequestId_RegisteredForCancellation()
+    {
+        var sln = "/repo/App.slnx";
+        var (dispatcher, _, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
+
+        var incomingCallsMsg = Msg("callHierarchy/incomingCalls", id: JsonValue.Create(9),
+            @params: new JsonObject { ["item"] = new JsonObject { ["uri"] = FileUri("/repo/src/Foo.cs") } });
+        await dispatcher.HandleMessageAsync(incomingCallsMsg);
+        server.ForwardedFrames.Clear();
+
+        var cancelMsg = Msg("$/cancelRequest", @params: new JsonObject { ["id"] = JsonValue.Create(9) });
+        var result = await dispatcher.HandleMessageAsync(cancelMsg);
+
+        Assert.True(result);
+        Assert.Single(server.ForwardedFrames);
+    }
+
+    [Fact]
+    public async Task CallHierarchy_UriAlreadyOpened_DoesNotSynthesizeDidOpenAgain()
+    {
+        var sln = "/repo/App.slnx";
+        var filePath = "/repo/src/Foo.cs";
+        var (dispatcher, _, _, pool) = Make(routeResult: sln, readFile: _ => Task.FromResult(""));
+        var server = (FakeServer)(await pool.GetOrAddAsync(sln)).Server;
+
+        var uri = FileUri(filePath);
+        await dispatcher.HandleMessageAsync(Msg("textDocument/didOpen",
+            @params: new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } }));
+        server.NotificationFrames.Clear();
+
+        var msg = Msg("callHierarchy/outgoingCalls", id: JsonValue.Create(10),
+            @params: new JsonObject { ["item"] = new JsonObject { ["uri"] = uri } });
+        await dispatcher.HandleMessageAsync(msg);
+
+        Assert.Empty(server.NotificationFrames);
+        Assert.Single(server.ForwardedFrames);
+    }
+
 }

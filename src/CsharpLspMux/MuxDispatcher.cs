@@ -39,6 +39,8 @@ public sealed class MuxDispatcher
             "workspace/didChangeWatchedFiles" => HandleDidChangeWatchedFiles(message),
             "shutdown" => HandleShutdown(message),
             "exit" => HandleExit(message),
+            "callHierarchy/incomingCalls" => HandleCallHierarchy(message),
+            "callHierarchy/outgoingCalls" => HandleCallHierarchy(message),
             _ when method?.StartsWith("textDocument/", StringComparison.Ordinal) == true => HandleTextDocument(message),
             _ => Task.FromResult(true),
         };
@@ -99,6 +101,50 @@ public sealed class MuxDispatcher
                         session.Register(JsonNodeToKey(requestId));
                     await server.ForwardRequestAsync(message);
                 }
+            }
+            else
+            {
+                _logger?.Info($"SolutionRouter: no solution found for {filePath}");
+                if (message.Id is JsonNode requestId)
+                    await _transport.SendErrorAsync(requestId, -32001, $"No solution found for file: {filePath}");
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Routes <c>callHierarchy/incomingCalls</c> and <c>callHierarchy/outgoingCalls</c>. Deliberately
+    /// separate from <see cref="HandleTextDocument"/>: these methods carry their target file at
+    /// <c>params.item.uri</c> (the <see cref="Capabilities.FeatureProvider"/> prepared by an earlier
+    /// <c>textDocument/prepareCallHierarchy</c> call), not <c>params.textDocument.uri</c>.
+    /// </summary>
+    private async Task<bool> HandleCallHierarchy(Frame message)
+    {
+        var method = message.Method;
+        var uri = message.Json["params"]?["item"]?["uri"]?.GetValue<string>();
+        if (uri is not null
+            && Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri)
+            && parsedUri.IsFile)
+        {
+            var filePath = parsedUri.LocalPath;
+            var solutionPath = _router.Route(filePath);
+
+            if (solutionPath is not null)
+            {
+                var session = await _pool.GetOrAddAsync(solutionPath);
+                var server = session.Server;
+
+                if (_logger?.IsInfoEnabled == true)
+                {
+                    var state = server.Readiness.ToString().ToLowerInvariant();
+                    _logger.Info($"route {method} → {solutionPath} (server: {state})");
+                }
+
+                if (message.Id is not null && !session.IsOpened(uri))
+                    await EnsureOpenAsync(session, uri, filePath);
+                if (message.Id is JsonNode requestId)
+                    session.Register(JsonNodeToKey(requestId));
+                await server.ForwardRequestAsync(message);
             }
             else
             {

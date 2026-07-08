@@ -53,6 +53,15 @@ All `textDocument/*` methods share one routing rule: extract `params.textDocumen
 | `textDocument/implementation` | Find implementations of interface/abstract | Forwarded; response relayed back |
 | `textDocument/prepareCallHierarchy` | Entry point for call hierarchy | Forwarded; response relayed back |
 
+### Call hierarchy
+
+`callHierarchy/incomingCalls` and `callHierarchy/outgoingCalls` are **not** `textDocument/*` methods and do not follow the shared routing rule above — they carry their target file at `params.item.uri` (the `CallHierarchyItem` returned by a prior `textDocument/prepareCallHierarchy`), not `params.textDocument.uri`. Each has its own dispatch handler that extracts `params.item.uri` → `SolutionRouter.Route()` → forwards to the owning server (ensure-open + `$/cancelRequest` registration, same as the text-document path). Do not fold these back into the `textDocument/*` rule — see ADR-0008.
+
+| Method | What Claude Code uses it for | Notes |
+|---|---|---|
+| `callHierarchy/incomingCalls` | Who calls this symbol | Routed on `params.item.uri`; forwarded, response relayed back |
+| `callHierarchy/outgoingCalls` | What this symbol calls | Routed on `params.item.uri`; forwarded, response relayed back |
+
 ### Workspace
 
 | Method | Mode | What Claude Code uses it for | Mux behaviour |

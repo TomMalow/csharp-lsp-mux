@@ -18,6 +18,14 @@ public sealed class ServiceARoutingTests(MuxServerFixture fixture)
     private const int InterfaceGetStatusLine = 18;
     private const int InterfaceGetStatusChar = 11;
 
+    // ServiceAClient.GetStatus concrete method declaration
+    private const int GetStatusDeclLine = 7;
+    private const int GetStatusDeclChar = 18;
+
+    // ServiceAConsumer.Report method declaration
+    private const int ReportDeclLine = 6;
+    private const int ReportDeclChar = 18;
+
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(120);
 
     [Fact]
@@ -134,5 +142,66 @@ public sealed class ServiceARoutingTests(MuxServerFixture fixture)
         Assert.Contains("ServiceAClient", symbolText);
         Assert.Contains("GetStatus", symbolText);
         Assert.DoesNotContain("ServiceB", symbolText);
+    }
+
+    [Fact]
+    [Trait("Category", "E2E")]
+    public async Task IncomingCalls_OnGetStatusDeclaration_ResolvesToConsumerReportCaller()
+    {
+        using var cts = new CancellationTokenSource(Timeout);
+
+        // Self-contained: prepare the call hierarchy item ourselves, then ask who calls it.
+        var prepareResponse = await fixture.Client.SendRequestAsync("textDocument/prepareCallHierarchy", new JsonObject
+        {
+            ["textDocument"] = new JsonObject { ["uri"] = fixture.ServiceAApiUri },
+            ["position"] = new JsonObject { ["line"] = GetStatusDeclLine, ["character"] = GetStatusDeclChar }
+        }, cts.Token);
+        Assert.NotNull(prepareResponse);
+        Assert.Null(prepareResponse["error"]);
+        var item = prepareResponse["result"]!.AsArray()[0];
+
+        // callHierarchy/incomingCalls routes on params.item.uri (not params.textDocument.uri) —
+        // a dedicated dispatch path distinct from the textDocument/* rule.
+        var incomingCallsResponse = await fixture.Client.SendRequestAsync("callHierarchy/incomingCalls", new JsonObject
+        {
+            ["item"] = item!.DeepClone()
+        }, cts.Token);
+
+        Assert.NotNull(incomingCallsResponse);
+        Assert.Null(incomingCallsResponse["error"]);
+        Assert.NotNull(incomingCallsResponse["result"]);
+        var incomingCallsText = incomingCallsResponse["result"]!.ToJsonString();
+        Assert.Contains("Report", incomingCallsText);
+        Assert.Contains("/ServiceA.Consumer/", incomingCallsText);
+        Assert.DoesNotContain("ServiceB", incomingCallsText);
+    }
+
+    [Fact]
+    [Trait("Category", "E2E")]
+    public async Task OutgoingCalls_OnReportDeclaration_ResolvesToApiGetStatusCallee()
+    {
+        using var cts = new CancellationTokenSource(Timeout);
+
+        var prepareResponse = await fixture.Client.SendRequestAsync("textDocument/prepareCallHierarchy", new JsonObject
+        {
+            ["textDocument"] = new JsonObject { ["uri"] = fixture.ServiceAConsumerUri },
+            ["position"] = new JsonObject { ["line"] = ReportDeclLine, ["character"] = ReportDeclChar }
+        }, cts.Token);
+        Assert.NotNull(prepareResponse);
+        Assert.Null(prepareResponse["error"]);
+        var item = prepareResponse["result"]!.AsArray()[0];
+
+        var outgoingCallsResponse = await fixture.Client.SendRequestAsync("callHierarchy/outgoingCalls", new JsonObject
+        {
+            ["item"] = item!.DeepClone()
+        }, cts.Token);
+
+        Assert.NotNull(outgoingCallsResponse);
+        Assert.Null(outgoingCallsResponse["error"]);
+        Assert.NotNull(outgoingCallsResponse["result"]);
+        var outgoingCallsText = outgoingCallsResponse["result"]!.ToJsonString();
+        Assert.Contains("GetStatus", outgoingCallsText);
+        Assert.Contains("/ServiceA.Api/", outgoingCallsText);
+        Assert.DoesNotContain("ServiceB", outgoingCallsText);
     }
 }

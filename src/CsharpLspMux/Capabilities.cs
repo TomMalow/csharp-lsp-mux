@@ -47,6 +47,10 @@ public static class Capabilities
             ClientSide: new(new[] { "documentSymbolProvider" }, () => JsonValue.Create(true)),
             RoslynSide: new(new[] { "textDocument", "documentSymbol" }, DynamicRegistrationFalse)),
         new FeatureProvider(
+            "callHierarchy",
+            ClientSide: new(new[] { "callHierarchyProvider" }, () => JsonValue.Create(true)),
+            RoslynSide: new(new[] { "textDocument", "callHierarchy" }, DynamicRegistrationFalse)),
+        new FeatureProvider(
             "workspaceSymbol",
             ClientSide: new(new[] { "workspaceSymbolProvider" }, () => JsonValue.Create(true)),
             RoslynSide: new(new[] { "workspace", "symbol" }, DynamicRegistrationFalse)),

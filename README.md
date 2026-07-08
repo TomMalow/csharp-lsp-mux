@@ -29,6 +29,7 @@ In a mono-repo with many `.sln` files, a single language server binds to whichev
 - Find references
 - Go to implementation
 - Document symbols
+- Call hierarchy (incoming/outgoing calls)
 - Workspace symbol search (broadcast + merge across active solutions)
 
 See [CONTEXT.md](./CONTEXT.md) for the authoritative, method-level dispatch table.

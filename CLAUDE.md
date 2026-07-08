@@ -47,6 +47,7 @@ Each server initialized with:
 |---|---|
 | `initialize` / `initialized` | Router handles; responds with synthesized capabilities; does not forward |
 | `textDocument/*` | Extract URI → route to owning solution's server; start server if not active |
+| `callHierarchy/incomingCalls` / `callHierarchy/outgoingCalls` | Extract `params.item.uri` (not `params.textDocument.uri`) → route to owning solution's server; dedicated handler, distinct from `textDocument/*` |
 | `workspace/symbol` | Broadcast to all active servers; merge result arrays |
 | `$/cancelRequest` | Forward to server owning the original request ID |
 | `shutdown` / `exit` | Drain all active servers then exit |

@@ -15,6 +15,7 @@ public class CapabilitiesTests
         Assert.True(caps["referencesProvider"]?.GetValue<bool>());
         Assert.True(caps["implementationProvider"]?.GetValue<bool>());
         Assert.True(caps["documentSymbolProvider"]?.GetValue<bool>());
+        Assert.True(caps["callHierarchyProvider"]?.GetValue<bool>());
         Assert.True(caps["workspaceSymbolProvider"]?.GetValue<bool>());
         Assert.True(caps["renameProvider"]?.GetValue<bool>());
         Assert.True(caps["codeActionProvider"]?.GetValue<bool>());
@@ -38,7 +39,7 @@ public class CapabilitiesTests
             new[]
             {
                 "textDocumentSync", "hoverProvider", "definitionProvider", "referencesProvider",
-                "implementationProvider", "documentSymbolProvider", "workspaceSymbolProvider",
+                "implementationProvider", "documentSymbolProvider", "callHierarchyProvider", "workspaceSymbolProvider",
                 "completionProvider", "signatureHelpProvider", "renameProvider", "codeActionProvider",
                 "diagnosticProvider",
             }.OrderBy(k => k),
@@ -57,6 +58,7 @@ public class CapabilitiesTests
         Assert.NotNull(caps["textDocument"]?["references"]);
         Assert.NotNull(caps["textDocument"]?["implementation"]);
         Assert.NotNull(caps["textDocument"]?["documentSymbol"]);
+        Assert.NotNull(caps["textDocument"]?["callHierarchy"]);
         Assert.NotNull(caps["textDocument"]?["completion"]);
         Assert.NotNull(caps["textDocument"]?["signatureHelp"]);
         Assert.NotNull(caps["textDocument"]?["rename"]);
@@ -69,7 +71,7 @@ public class CapabilitiesTests
             new[]
             {
                 "synchronization", "hover", "definition", "references", "implementation",
-                "documentSymbol", "completion", "signatureHelp", "rename", "codeAction", "diagnostic",
+                "documentSymbol", "callHierarchy", "completion", "signatureHelp", "rename", "codeAction", "diagnostic",
             }.OrderBy(k => k),
             ((JsonObject)caps["textDocument"]!).Select(kv => kv.Key).OrderBy(k => k));
         Assert.Equal(new[] { "symbol" }, ((JsonObject)caps["workspace"]!).Select(kv => kv.Key));
