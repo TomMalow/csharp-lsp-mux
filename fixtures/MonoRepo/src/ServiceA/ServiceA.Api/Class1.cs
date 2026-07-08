@@ -1,6 +1,6 @@
 namespace ServiceA.Api;
 
-public class ServiceAClient
+public class ServiceAClient : IServiceAClient
 {
     /// <summary>
     /// Retrieves the client's status string. SENTINEL_SERVICE_A_GETSTATUS_DOC
@@ -9,4 +9,12 @@ public class ServiceAClient
     {
         return $"status-{id}";
     }
+}
+
+public interface IServiceAClient
+{
+    /// <summary>
+    /// Retrieves the client's status string.
+    /// </summary>
+    string GetStatus(int id);
 }

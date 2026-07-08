@@ -27,6 +27,7 @@ In a mono-repo with many `.sln` files, a single language server binds to whichev
 - Hover
 - Go to definition
 - Find references
+- Go to implementation
 - Document symbols
 - Workspace symbol search (broadcast + merge across active solutions)
 

@@ -39,6 +39,10 @@ public static class Capabilities
             ClientSide: new(new[] { "referencesProvider" }, () => JsonValue.Create(true)),
             RoslynSide: new(new[] { "textDocument", "references" }, DynamicRegistrationFalse)),
         new FeatureProvider(
+            "implementation",
+            ClientSide: new(new[] { "implementationProvider" }, () => JsonValue.Create(true)),
+            RoslynSide: new(new[] { "textDocument", "implementation" }, DynamicRegistrationFalse)),
+        new FeatureProvider(
             "documentSymbol",
             ClientSide: new(new[] { "documentSymbolProvider" }, () => JsonValue.Create(true)),
             RoslynSide: new(new[] { "textDocument", "documentSymbol" }, DynamicRegistrationFalse)),

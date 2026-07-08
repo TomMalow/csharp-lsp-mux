@@ -14,6 +14,10 @@ public sealed class ServiceARoutingTests(MuxServerFixture fixture)
     private const int GetStatusCallLine = 9;
     private const int GetStatusCallChar = 22;
 
+    // IServiceAClient.GetStatus interface method declaration
+    private const int InterfaceGetStatusLine = 18;
+    private const int InterfaceGetStatusChar = 11;
+
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(120);
 
     [Fact]
@@ -87,6 +91,29 @@ public sealed class ServiceARoutingTests(MuxServerFixture fixture)
         Assert.Contains("/ServiceA.Api/", referencesText);
         Assert.Contains("/ServiceA.Consumer/", referencesText);
         Assert.DoesNotContain("ServiceB", referencesText);
+    }
+
+    [Fact]
+    [Trait("Category", "E2E")]
+    public async Task Implementation_OnInterfaceMember_ResolvesToServiceAConcreteClass()
+    {
+        using var cts = new CancellationTokenSource(Timeout);
+
+        // Implementation on the interface method declaration — proves the mux forwards
+        // textDocument/implementation and Roslyn resolves it to the concrete class in the
+        // same file/solution, not just echoing the interface declaration back.
+        var implementationResponse = await fixture.Client.SendRequestAsync("textDocument/implementation", new JsonObject
+        {
+            ["textDocument"] = new JsonObject { ["uri"] = fixture.ServiceAApiUri },
+            ["position"] = new JsonObject { ["line"] = InterfaceGetStatusLine, ["character"] = InterfaceGetStatusChar }
+        }, cts.Token);
+
+        Assert.NotNull(implementationResponse);
+        Assert.Null(implementationResponse["error"]);
+        Assert.NotNull(implementationResponse["result"]);
+        var implementationText = implementationResponse["result"]!.ToJsonString();
+        Assert.Contains("/ServiceA.Api/", implementationText);
+        Assert.DoesNotContain("ServiceB", implementationText);
     }
 
     [Fact]
