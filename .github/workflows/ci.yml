@@ -1,0 +1,44 @@
+name: CI
+
+# Build and test on every push to main and on pull requests, so regressions
+# (especially in the E2E suite, which drives real roslyn-language-server
+# processes) are caught before a release tag triggers Publish.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+# Cancel superseded runs on the same ref (e.g. rapid pushes to a PR branch).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore (locked)
+        run: dotnet restore --locked-mode
+
+      # roslyn-language-server is a *local* dotnet tool (see
+      # .config/dotnet-tools.json), which is not on PATH. The mux launches it as
+      # a bare "roslyn-language-server" process, so the E2E suite needs it on
+      # PATH — install it globally and add the tools dir to PATH.
+      - name: Install roslyn-language-server on PATH (E2E tests)
+        run: |
+          dotnet tool install --global roslyn-language-server --version 5.9.0-1.26303.1
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Test
+        run: dotnet test -c Release --no-build
