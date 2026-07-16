@@ -7,7 +7,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>csharp-lsp-mux</ToolCommandName>
     <PackageId>CsharpLspMux</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.0-preview.1</Version>
 
     <!-- NuGet package metadata -->
     <Authors>Thomas Malowanczyk</Authors>
