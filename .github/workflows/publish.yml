@@ -74,9 +74,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A SemVer suffix (e.g. v0.2.0-preview.1) => prerelease, and it must
+          # not be marked "Latest" so it can't outrank a stable release.
+          prerelease=""
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease="--prerelease --latest=false" ;;
+          esac
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" artifacts/*.nupkg artifacts/*.snupkg --clobber
           else
             gh release create "$GITHUB_REF_NAME" artifacts/*.nupkg artifacts/*.snupkg \
-              --title "$GITHUB_REF_NAME" --generate-notes
+              --title "$GITHUB_REF_NAME" --generate-notes $prerelease
           fi

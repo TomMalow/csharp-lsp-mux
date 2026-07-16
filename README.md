@@ -52,6 +52,9 @@ If it is missing, `csharp-lsp-mux` exits with a message telling you to install i
 ```bash
 dotnet tool install --global CsharpLspMux
 csharp-lsp-mux --version
+
+# Preview/prerelease versions are opt-in:
+dotnet tool install --global CsharpLspMux --prerelease
 ```
 
 ### From source
