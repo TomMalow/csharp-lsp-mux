@@ -10,11 +10,13 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # Gated environment: NUGET_API_KEY lives here and the job pauses for a
-    # required reviewer before it can push, even if someone else pushes a tag.
+    # Gated environment: the job pauses for a required reviewer before it can
+    # publish, even if someone else pushes a tag. The nuget.org Trusted
+    # Publishing policy is also scoped to this environment name.
     environment: nuget
     permissions:
       contents: read
+      id-token: write # required for OIDC: mint the short-lived NuGet key
     steps:
       - uses: actions/checkout@v4
 
@@ -49,9 +51,17 @@ jobs:
       - name: Pack
         run: dotnet pack src/CsharpLspMux/CsharpLspMux.csproj -c Release --no-build -o artifacts
 
+      # Trusted Publishing: exchange the OIDC token for a short-lived (1h) NuGet
+      # key. Runs immediately before push so the key doesn't expire in flight.
+      - name: NuGet login (OIDC -> temp API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }} # your nuget.org profile name (not email)
+
       - name: Push to nuget.org
         run: >
           dotnet nuget push "artifacts/*.nupkg"
-          --api-key "${{ secrets.NUGET_API_KEY }}"
+          --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
