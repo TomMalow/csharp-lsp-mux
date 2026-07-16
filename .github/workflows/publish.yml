@@ -39,8 +39,14 @@ jobs:
       - name: Restore (locked)
         run: dotnet restore --locked-mode
 
-      - name: Restore local tools
-        run: dotnet tool restore
+      # roslyn-language-server is a *local* dotnet tool (see
+      # .config/dotnet-tools.json), which is not on PATH. The mux launches it as
+      # a bare "roslyn-language-server" process, so the E2E suite needs it on
+      # PATH — install it globally and add the tools dir to PATH.
+      - name: Install roslyn-language-server on PATH (E2E tests)
+        run: |
+          dotnet tool install --global roslyn-language-server --version 5.9.0-1.26303.1
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
       - name: Build
         run: dotnet build -c Release --no-restore
