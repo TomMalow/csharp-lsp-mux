@@ -10,6 +10,9 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Gated environment: NUGET_API_KEY lives here and the job pauses for a
+    # required reviewer before it can push, even if someone else pushes a tag.
+    environment: nuget
     permissions:
       contents: read
     steps:
