@@ -15,7 +15,7 @@ jobs:
     # Publishing policy is also scoped to this environment name.
     environment: nuget
     permissions:
-      contents: read
+      contents: write # create the GitHub Release + upload package assets
       id-token: write # required for OIDC: mint the short-lived NuGet key
     steps:
       - uses: actions/checkout@v4
@@ -65,3 +65,18 @@ jobs:
           --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
+
+      # Publish a GitHub Release for this tag with auto-generated notes and the
+      # packed artifacts attached. The tag already exists (it triggered this
+      # run), so this does not re-fire the workflow. Idempotent: a re-run
+      # updates the assets on the existing release instead of failing.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" artifacts/*.nupkg artifacts/*.snupkg --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" artifacts/*.nupkg artifacts/*.snupkg \
+              --title "$GITHUB_REF_NAME" --generate-notes
+          fi
