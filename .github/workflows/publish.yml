@@ -1,0 +1,54 @@
+name: Publish
+
+# Publishes the CsharpLspMux dotnet tool to nuget.org when a version tag is pushed.
+# Tag must match the <Version> in the csproj, e.g.:  git tag v0.1.0 && git push --tags
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Verify tag matches csproj version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          csproj=$(grep -oPm1 '(?<=<Version>)[^<]+' src/CsharpLspMux/CsharpLspMux.csproj)
+          echo "Tag version:    $tag"
+          echo "csproj version: $csproj"
+          if [ "$tag" != "$csproj" ]; then
+            echo "::error::Tag v$tag does not match <Version>$csproj</Version> in CsharpLspMux.csproj"
+            exit 1
+          fi
+
+      - name: Restore (locked)
+        run: dotnet restore --locked-mode
+
+      - name: Restore local tools
+        run: dotnet tool restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Test
+        run: dotnet test -c Release --no-build
+
+      - name: Pack
+        run: dotnet pack src/CsharpLspMux/CsharpLspMux.csproj -c Release --no-build -o artifacts
+
+      - name: Push to nuget.org
+        run: >
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key "${{ secrets.NUGET_API_KEY }}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate

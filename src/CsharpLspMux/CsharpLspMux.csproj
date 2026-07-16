@@ -8,7 +8,24 @@
     <ToolCommandName>csharp-lsp-mux</ToolCommandName>
     <PackageId>CsharpLspMux</PackageId>
     <Version>0.1.0</Version>
+
+    <!-- NuGet package metadata -->
+    <Authors>Thomas Malowanczyk</Authors>
+    <Description>A transparent LSP multiplexer for C# mono-repos. Routes LSP JSON-RPC between an editor (e.g. Claude Code) and multiple roslyn-language-server instances — one per solution — so go-to-definition, hover, and references resolve in the right workspace. Requires roslyn-language-server on PATH.</Description>
+    <PackageTags>lsp;roslyn;csharp;claude-code;language-server;monorepo;jsonrpc</PackageTags>
+    <PackageProjectUrl>https://github.com/TomMalow/csharp-lsp-mux</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/TomMalow/csharp-lsp-mux</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
 
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">

@@ -34,7 +34,27 @@ In a mono-repo with many `.sln` files, a single language server binds to whichev
 
 See [CONTEXT.md](./CONTEXT.md) for the authoritative, method-level dispatch table.
 
+## Prerequisites
+
+`csharp-lsp-mux` launches `roslyn-language-server` child processes, so that tool
+**must be installed and on your `PATH`**. It is not bundled with this package.
+
+```bash
+dotnet tool install --global roslyn-language-server
+```
+
+If it is missing, `csharp-lsp-mux` exits with a message telling you to install it.
+
 ## Installation
+
+### From nuget.org (once published)
+
+```bash
+dotnet tool install --global CsharpLspMux
+csharp-lsp-mux --version
+```
+
+### From source
 
 ```bash
 # Pack then install as a global tool

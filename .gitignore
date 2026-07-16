@@ -80,9 +80,6 @@ TestResult.xml
 nunit-*.xml
 .codegraph/
 
-# Github
-.github
-
 ### macOS ###
 # General
 .DS_Store

@@ -74,6 +74,11 @@ public sealed class RoslynServerProcess : IChildServer
         return server;
     }
 
+    private const string MissingRoslynMessage =
+        "Could not start 'roslyn-language-server'. It must be installed and on your PATH. " +
+        "Install it with: dotnet tool install --global roslyn-language-server " +
+        "(see https://github.com/TomMalow/csharp-lsp-mux#prerequisites).";
+
     public static RoslynServerProcess Start(string solutionPath, MuxLogger? logger = null)
     {
         var solutionDir = Path.GetDirectoryName(solutionPath)!;
@@ -88,7 +93,18 @@ public sealed class RoslynServerProcess : IChildServer
             WorkingDirectory = solutionDir,
         };
 
-        var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start roslyn-language-server");
+        Process process;
+        try
+        {
+            process = Process.Start(psi) ?? throw new InvalidOperationException(MissingRoslynMessage);
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            // Win32Exception here means the OS could not find/launch the executable — i.e.
+            // roslyn-language-server is not on PATH. Surface an actionable message instead.
+            throw new InvalidOperationException(MissingRoslynMessage, ex);
+        }
+
         var server = new RoslynServerProcess(
             process.StandardInput.BaseStream,
             new LspFrameReader(process.StandardOutput.BaseStream),
